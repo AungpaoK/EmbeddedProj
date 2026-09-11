@@ -3,10 +3,10 @@
 
 // --- L298N Motor Pins (Pins 8 to 13) ---
 #define ENA 10   // Left Motor Speed PWM
-#define IN1 9    // Left Motor Direction 1
-#define IN2 8    // Left Motor Direction 2
-#define IN3 13   // Right Motor Direction 1
-#define IN4 12   // Right Motor Direction 2
+#define IN1 8    // Left Motor Direction 1
+#define IN2 9    // Left Motor Direction 2
+#define IN3 12   // Right Motor Direction 1
+#define IN4 13   // Right Motor Direction 2
 #define ENB 11   // Right Motor Speed PWM
 
 // --- Right Motor Encoder Pins ---
