@@ -10,12 +10,12 @@
 #define ENB 11   // Right Motor Speed PWM
 
 // --- Right Motor Encoder Pins ---
-#define RIGHT_ENC_A A4  // PC4 (PCINT12) - Phase A
-#define RIGHT_ENC_B A5  // PC5 (PCINT13) - Phase B
+#define RIGHT_ENC_A A1 // PC1 (PCINT9)  - Phase A
+#define RIGHT_ENC_B A0 // PC0 (PCINT8)  - Phase B
 
 // --- Left Motor Encoder Pins ---
-#define LEFT_ENC_A 2  // PD2 (INT0) - Phase A
-#define LEFT_ENC_B 3  // PD3 (INT1) - Phase B
+#define LEFT_ENC_A A5  // PC5 (PCINT12) - Phase A
+#define LEFT_ENC_B A4  // PC4 (PCINT13) - Phase B
 
 volatile long rightEncoderTicks = 0;
 volatile long leftEncoderTicks = 0;
