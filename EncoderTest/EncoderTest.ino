@@ -14,6 +14,9 @@
 #define LEFT_ENC_A A5  // PC5 (PCINT13) - Phase A
 #define LEFT_ENC_B A4  // PC4 (PCINT12) - Phase B
 
+uint8_t debugPrintIntervalMS = 25;
+unsigned long lastDebugPrintMS = 0;
+
 volatile long rightEncoderTicks = 0;
 volatile long leftEncoderTicks = 0;
 
@@ -72,7 +75,7 @@ void loop()
 {
   unsigned long now = millis();
 
-  if (now - lastDebugPrintMS >= DEBUG_PRINT_INTERVAL_MS) {
+  if (now - lastDebugPrintMS >= debugPrintIntervalMS) {
     lastDebugPrintMS = now;
 
     cli();
