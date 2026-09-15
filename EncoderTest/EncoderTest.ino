@@ -14,7 +14,7 @@
 #define LEFT_ENC_A A5  // PC5 (PCINT13) - Phase A
 #define LEFT_ENC_B A4  // PC4 (PCINT12) - Phase B
 
-uint8_t debugPrintIntervalMS = 25;
+uint8_t debugPrintIntervalMS = 20;
 unsigned long lastDebugPrintMS = 0;
 
 volatile long rightEncoderTicks = 0;
@@ -48,15 +48,9 @@ ISR(PCINT1_vect) {
 }
 
 void setupEncoders() {
- // Set A0, A1, A4, and A5 as INPUTs
   DDRC &= ~0b00110011;
-  
   PORTC |= (1 << PC0) | (1 << PC1) | (1 << PC4) | (1 << PC5);
-
-  // Enable Pin Change Interrupts on PORTC
   PCICR |= (1 << PCIE1);
-  
-  // Enable interrupt masks for Phase A on both motors (PCINT9 = A1, PCINT13 = A5)
   PCMSK1 |= (1 << PCINT9) | (1 << PCINT13);
 }
 
