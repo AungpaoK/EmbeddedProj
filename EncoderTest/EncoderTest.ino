@@ -73,14 +73,13 @@ void loop()
     lastDebugPrintMS = now;
 
     cli();
-    long currentRightTicks = rightEncoderTicks;
     long currentLeftTicks = leftEncoderTicks;
+    long currentRightTicks = rightEncoderTicks;
     sei();
 
-    Serial.print("Right Encoder Ticks: ");
+    Serial.print(currentLeftTicks);
+    Serial.print(", ");
     Serial.println(currentRightTicks);
 
-    Serial.print("Left Encoder Ticks: ");
-    Serial.println(currentLeftTicks);
   }
 }
