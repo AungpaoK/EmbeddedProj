@@ -1,0 +1,325 @@
+/*
+ * Arduino_1_Motion.ino
+ * ======================
+ * Motion & Drive Controller — Arduino Uno R3 #1
+ *
+ * หน้าที่:
+ *   - รับคำสั่ง Serial จาก Raspberry Pi: FORWARD:<m>  TURN:<deg>  STOP
+ *   - ขับมอเตอร์ด้วย Dual PID Speed Control + Wheel Sync (50 Hz loop)
+ *   - ส่ง ENCODER:L,R ทุก 100ms ให้ Pi คำนวณ Odometry
+ *   - ส่ง STATUS:DONE เมื่อทำคำสั่งเสร็จ, STATUS:ERROR เมื่อเกิดปัญหา
+ *
+ * Serial Protocol:
+ *   รับ:  FORWARD:<distance_m>\n  |  TURN:<degrees>\n  |  STOP\n
+ *   ส่ง:  STATUS:DONE\n  |  STATUS:ERROR\n  |  ENCODER:<L>,<R>\n
+ *
+ * Pin Map (อ้างอิง robotconfig.h):
+ *   D7=IN4, D8=IN1, D9=IN2, D10=ENA, D11=ENB, D12=IN3
+ *   A0=RIGHT_ENC_A, A1=RIGHT_ENC_B, A4=LEFT_ENC_A, A5=LEFT_ENC_B
+ */
+
+#include "robotconfig.h"
+#include "Arduino.h"
+
+// ============================================================
+// Encoder Sign Convention
+// ============================================================
+const bool LEFT_ENC_INVERT  = false;
+const bool RIGHT_ENC_INVERT = true;  // Motor ขวาต่อสลับขั้ว
+
+volatile long leftEncoderTicks  = 0;
+volatile long rightEncoderTicks = 0;
+
+// ============================================================
+// Physical & Motion Constants
+// ============================================================
+const float METERS_PER_PULSE = (2.0 * 3.14159265 * WHEEL_RADIUS) / TICKS_PER_REV;
+
+// N = (W/2) * π * (TPR / (2π*R))  — Ticks สำหรับการหมุน 180°
+const float TICKS_PER_DEGREE =
+    ((WHEEL_BASE / 2.0) * PI * (TICKS_PER_REV / (2.0 * 3.14159265 * WHEEL_RADIUS))) / 180.0;
+
+const unsigned long CONTROL_INTERVAL_MS  = 20;    // 50 Hz PID loop
+const unsigned long ENCODER_PRINT_MS     = 100;   // ส่ง Encoder ทุก 100ms
+
+const float CRUISE_SPEED_MPS  = 0.25;
+const float TURN_SPEED_MPS    = 0.15;
+const float ACCEL_STEP_MPS    = 0.005;
+const float DECEL_DIST_METERS = 0.20;
+const float MIN_DRIVE_SPEED   = 0.04;   // ความเร็วขั้นต่ำเพื่อไม่ให้มอเตอร์ฝืด
+
+float K_sync = 1.5;   // Cross-coupling Sync Gain
+
+// ============================================================
+// PID Controller
+// ============================================================
+struct PIDController {
+    float Kp = 150.0;
+    float Ki = 10.0;
+    float Kd = 1.2;
+
+    float errorSum      = 0.0;
+    float lastSpeed     = 0.0;
+    float actualSpeed   = 0.0;
+    long  prevTicks     = 0;
+
+    void reset() {
+        errorSum    = 0.0;
+        lastSpeed   = 0.0;
+        actualSpeed = 0.0;
+    }
+
+    float compute(long currentTicks, float targetMPS, float dt) {
+        long  delta   = currentTicks - prevTicks;
+        prevTicks     = currentTicks;
+
+        float rawSpeed = (delta * METERS_PER_PULSE) / dt;
+        actualSpeed    = 0.85f * actualSpeed + 0.15f * rawSpeed;
+
+        float err = targetMPS - actualSpeed;
+        errorSum  = constrain(errorSum + err * dt, -2.0f, 2.0f);
+
+        float dSpeed = (actualSpeed - lastSpeed) / dt;
+        lastSpeed = actualSpeed;
+
+        float ff  = (targetMPS / CRUISE_SPEED_MPS) * 200.0f;
+        float out = ff + Kp * err + Ki * errorSum - Kd * dSpeed;
+
+        if (abs(targetMPS) > 0.01f && abs(out) < 35.0f) {
+            out = (targetMPS > 0) ? 35.0f : -35.0f;
+        }
+        return out;
+    }
+};
+
+PIDController pidLeft;
+PIDController pidRight;
+
+// ============================================================
+// Command FSM
+// ============================================================
+enum MotionCommand { CMD_IDLE, CMD_FORWARD, CMD_TURN };
+
+MotionCommand currentCmd    = CMD_IDLE;
+float         cmdTarget     = 0.0;  // เมตร (FORWARD) หรือ องศา (TURN)
+float         rampedSpeed   = 0.0;
+long          startLeftTicks  = 0;
+long          startRightTicks = 0;
+
+unsigned long lastControlTime  = 0;
+unsigned long lastEncoderPrint = 0;
+
+// ============================================================
+// Encoder ISR (PCINT1 — Port C)
+// ============================================================
+ISR(PCINT1_vect) {
+    static uint8_t lastPortC = 0;
+    uint8_t cur = PINC;
+
+    // Left: Phase A = PC4 (A4), Phase B = PC5 (A5)
+    if ((cur & (1 << PC4)) && !(lastPortC & (1 << PC4))) {
+        if (cur & (1 << PC5)) leftEncoderTicks--;
+        else                   leftEncoderTicks++;
+    }
+    // Right: Phase A = PC0 (A0), Phase B = PC1 (A1)
+    if ((cur & (1 << PC0)) && !(lastPortC & (1 << PC0))) {
+        if (cur & (1 << PC1)) rightEncoderTicks--;
+        else                   rightEncoderTicks++;
+    }
+    lastPortC = cur;
+}
+
+void setupEncoders() {
+    DDRC  &= ~0b00110011;
+    PORTC |= (1 << PC0) | (1 << PC1) | (1 << PC4) | (1 << PC5);
+    PCICR |= (1 << PCIE1);
+    PCMSK1 |= (1 << PCINT8) | (1 << PCINT12);
+}
+
+// ============================================================
+// Motor Driver
+// ============================================================
+void driveMotors(int leftPWM, int rightPWM) {
+    int pwmL = constrain(abs(leftPWM), 0, 255);
+    if      (leftPWM > 0) { digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW); }
+    else if (leftPWM < 0) { digitalWrite(IN1, LOW);  digitalWrite(IN2, HIGH); }
+    else                  { digitalWrite(IN1, LOW);  digitalWrite(IN2, LOW); }
+    analogWrite(ENA, pwmL);
+
+    int pwmR = constrain(abs(rightPWM), 0, 255);
+    if      (rightPWM > 0) { digitalWrite(IN3, LOW);  digitalWrite(IN4, HIGH); }
+    else if (rightPWM < 0) { digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW); }
+    else                   { digitalWrite(IN3, LOW);  digitalWrite(IN4, LOW); }
+    analogWrite(ENB, pwmR);
+}
+
+// ============================================================
+// Tick Reader (Thread-safe snapshot)
+// ============================================================
+void readTicks(long &leftOut, long &rightOut) {
+    noInterrupts();
+    long rawL = leftEncoderTicks;
+    long rawR = rightEncoderTicks;
+    interrupts();
+    leftOut  = LEFT_ENC_INVERT  ? -rawL : rawL;
+    rightOut = RIGHT_ENC_INVERT ? -rawR : rawR;
+}
+
+// ============================================================
+// Start a new command: snapshot baseline ticks & reset PIDs
+// ============================================================
+void beginCommand(MotionCommand cmd, float target) {
+    readTicks(startLeftTicks, startRightTicks);
+    rampedSpeed = 0.0;
+    pidLeft.reset();
+    pidRight.reset();
+    currentCmd = cmd;
+    cmdTarget  = target;
+}
+
+// ============================================================
+// Serial Command Parser
+// ============================================================
+void parseSerialCommand(const String &line) {
+    if (line == "STOP") {
+        driveMotors(0, 0);
+        currentCmd = CMD_IDLE;
+        Serial.println("STATUS:DONE");
+        return;
+    }
+
+    if (line.startsWith("FORWARD:")) {
+        float dist = line.substring(8).toFloat();
+        if (dist > 0 && dist < 20.0) {
+            beginCommand(CMD_FORWARD, dist);
+        } else {
+            Serial.println("STATUS:ERROR");
+        }
+        return;
+    }
+
+    if (line.startsWith("TURN:")) {
+        float deg = line.substring(5).toFloat();
+        beginCommand(CMD_TURN, deg);
+        return;
+    }
+
+    // Unknown command
+    Serial.println("STATUS:ERROR");
+}
+
+// ============================================================
+// Motion Execution (called at 50 Hz)
+// ============================================================
+void executeForward(float dt) {
+    long leftTicks, rightTicks;
+    readTicks(leftTicks, rightTicks);
+
+    long dL = leftTicks  - startLeftTicks;
+    long dR = rightTicks - startRightTicks;
+    float distTraveled  = ((dL + dR) / 2.0f) * METERS_PER_PULSE;
+    float distRemaining = cmdTarget - distTraveled;
+
+    if (distRemaining <= 0.005f) {
+        driveMotors(0, 0);
+        currentCmd = CMD_IDLE;
+        Serial.println("STATUS:DONE");
+        return;
+    }
+
+    // Ramp target speed
+    float desiredSpeed = CRUISE_SPEED_MPS;
+    if (distRemaining < DECEL_DIST_METERS) {
+        desiredSpeed = max((distRemaining / DECEL_DIST_METERS) * CRUISE_SPEED_MPS, MIN_DRIVE_SPEED);
+    }
+
+    if (rampedSpeed < desiredSpeed)
+        rampedSpeed = min(rampedSpeed + ACCEL_STEP_MPS, desiredSpeed);
+    else if (rampedSpeed > desiredSpeed)
+        rampedSpeed = max(rampedSpeed - ACCEL_STEP_MPS, desiredSpeed);
+
+    // Wheel Sync: คอมเพนเซท drift
+    float posErr = (dL - dR) * METERS_PER_PULSE;
+    float sync   = posErr * K_sync;
+
+    float pwmL = pidLeft.compute(leftTicks,  rampedSpeed - sync, dt);
+    float pwmR = pidRight.compute(rightTicks, rampedSpeed + sync, dt);
+
+    driveMotors((int)pwmL, (int)pwmR);
+}
+
+void executeTurn(float dt) {
+    long leftTicks, rightTicks;
+    readTicks(leftTicks, rightTicks);
+
+    // นับ ticks สะสมจากทั้งสองล้อ (Tank Turn)
+    long dL   = abs(leftTicks  - startLeftTicks);
+    long dR   = abs(rightTicks - startRightTicks);
+    long done = (dL + dR) / 2;
+
+    float targetTicks = abs(cmdTarget) * TICKS_PER_DEGREE;
+
+    if (done >= (long)targetTicks) {
+        driveMotors(0, 0);
+        currentCmd = CMD_IDLE;
+        Serial.println("STATUS:DONE");
+        return;
+    }
+
+    // + องศา = CCW = ล้อซ้าย backward, ล้อขวา forward
+    float dirSign = (cmdTarget >= 0) ? 1.0f : -1.0f;
+    float pwmL = pidLeft.compute(leftTicks,  -TURN_SPEED_MPS * dirSign, dt);
+    float pwmR = pidRight.compute(rightTicks, TURN_SPEED_MPS * dirSign, dt);
+
+    driveMotors((int)pwmL, (int)pwmR);
+}
+
+// ============================================================
+// setup / loop
+// ============================================================
+void setup() {
+    Serial.begin(115200);
+    DDRB |= 0b00111111;
+    setupEncoders();
+
+    pidLeft.Kp  = 150.0; pidLeft.Ki  = 10.0; pidLeft.Kd  = 1.2;
+    pidRight.Kp = 150.0; pidRight.Ki = 10.0; pidRight.Kd = 1.2;
+
+    Serial.println("STATUS:READY");
+}
+
+void loop() {
+    unsigned long now = millis();
+
+    // --- 50 Hz PID/Motion Loop ---
+    if (now - lastControlTime >= CONTROL_INTERVAL_MS) {
+        float dt = (now - lastControlTime) / 1000.0f;
+        lastControlTime = now;
+
+        switch (currentCmd) {
+            case CMD_FORWARD: executeForward(dt); break;
+            case CMD_TURN:    executeTurn(dt);    break;
+            case CMD_IDLE:    /* do nothing */    break;
+        }
+    }
+
+    // --- Encoder Broadcast (100 ms) ---
+    if (now - lastEncoderPrint >= ENCODER_PRINT_MS) {
+        lastEncoderPrint = now;
+        long L, R;
+        readTicks(L, R);
+        Serial.print("ENCODER:");
+        Serial.print(L);
+        Serial.print(",");
+        Serial.println(R);
+    }
+
+    // --- Serial Command Receiver (Non-blocking) ---
+    if (Serial.available()) {
+        String line = Serial.readStringUntil('\n');
+        line.trim();
+        if (line.length() > 0) {
+            parseSerialCommand(line);
+        }
+    }
+}
