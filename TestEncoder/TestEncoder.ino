@@ -15,9 +15,9 @@ ISR(PCINT1_vect) {
   if ((currentPortC & (1 << PC4)) && !(lastPortC & (1 << PC4))) {
     // Check Phase B to determine rotation direction
     if (currentPortC & (1 << PC5)) {
-      leftEncoderTicks++;  // Forward
+      leftEncoderTicks--;  // Forward
     } else {
-      leftEncoderTicks--;  // Reverse
+      leftEncoderTicks++;  // Reverse
     }
   }
 
@@ -25,9 +25,9 @@ ISR(PCINT1_vect) {
   if ((currentPortC & (1 << PC0)) && !(lastPortC & (1 << PC0))) {
     // Check Phase B to determine rotation direction
     if (currentPortC & (1 << PC1)) {
-      rightEncoderTicks--;  // Forward
+      rightEncoderTicks++;  // Forward
     } else {
-      rightEncoderTicks++;  // Reverse
+      rightEncoderTicks--;  // Reverse
     }
   }
   lastPortC = currentPortC;

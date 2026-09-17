@@ -48,7 +48,7 @@ stateDiagram-v2
     state "MOTION_BRAKE_ARRIVED\n(เบรกหยุด / ถึงจุดหมาย)\n[LED: ไฟเบรกเตือน]" as MOTION_BRAKE_ARRIVED
 
     MOTION_IDLE --> MOTION_CALC_HEADING: รับคำสั่ง Waypoint ใหม่
-    
+  
     MOTION_CALC_HEADING --> MOTION_TURN_LEFT: มุมเป้าหมายอยู่ทางซ้าย (Δθ > threshold)
     MOTION_CALC_HEADING --> MOTION_TURN_RIGHT: มุมเป้าหมายอยู่ทางขวา (Δθ < -threshold)
     MOTION_CALC_HEADING --> MOTION_FORWARD: ทิศทางตรงกับเป้าหมายแล้ว (|Δθ| ≤ threshold)
@@ -67,21 +67,34 @@ stateDiagram-v2
 ### รายละเอียดการทำงานของ Motion & LED Subsystem
 
 #### A. การคำนวณตำแหน่งแบบ Odometry (Dead Reckoning)
+
 ระบบอ่านค่าจาก Interrupt ของ Left/Right Encoder ทุก ๆ Control Loop (50 Hz):
+
 - $\Delta d_{left} = \Delta \text{ticks}_{left} \times \text{METERS\_PER\_PULSE}$
 - $\Delta d_{right} = \Delta \text{ticks}_{right} \times \text{METERS\_PER\_PULSE}$
 - $\Delta d = \frac{\Delta d_{right} + \Delta d_{left}}{2}$
 - $\Delta \theta = \frac{\Delta d_{right} - \Delta d_{left}}{\text{WHEEL\_BASE}}$
 - อัปเดตพิกัด:
-  $$x \leftarrow x + \Delta d \cdot \cos(\theta + \frac{\Delta \theta}{2})$$
-  $$y \leftarrow y + \Delta d \cdot \sin(\theta + \frac{\Delta \theta}{2})$$
-  $$\theta \leftarrow \theta + \Delta \theta$$
+
+  $$
+  x \leftarrow x + \Delta d \cdot \cos(\theta + \frac{\Delta \theta}{2})
+  $$
+
+  $$
+  y \leftarrow y + \Delta d \cdot \sin(\theta + \frac{\Delta \theta}{2})
+  $$
+
+  $$
+  \theta \leftarrow \theta + \Delta \theta
+  $$
 
 #### B. การควบคุมความเร็ว (Motion Profiling & Synchronization)
+
 1. **Ramping (Accel/Cruise/Decel)**: ปรับอัตราเร่งขึ้นแบบนุ่มนวล และคำนวณจุด Deceleration Distance ล่วงหน้าเพื่อไม่ให้หัวทิ่มหรืออาหารหก
 2. **PID & Wheel Sync**: ใช้ PID คุมความเร็วแต่ละล้อ พร้อม cross-coupling sync ($K_{sync}$) รักษาทิศทางตรง
 
 #### C. การจัดการ LED Matrix (Non-blocking Engine via `millis()`)
+
 - LED Matrix ไม่ใช้ฟังก์ชัน `delay()` เพื่อไม่รบกวน PID loop 50Hz
 - อัปเดตแอนิเมชันผ่านตัวแปรจับเวลา `millis()` ตามสถานะของ Motion Sub-FSM:
   - **MOTION_TURN_LEFT**: รันแอนิเมชันลูกศรวิ่งชี้ไปทางซ้าย กะพริบทุก 200–250 ms

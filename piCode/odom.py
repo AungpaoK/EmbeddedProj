@@ -15,7 +15,7 @@ class OdometerNode(Node):
         super().__init__("odometer_node")
 
         # --- Physical Robot Parameters (Synchronized) ---
-        self.TICKS_PER_REV = 1920.0  # Ticks per full wheel revolution
+        self.TICKS_PER_REV = 1080.0  # Ticks per full wheel revolution
         self.WHEEL_RADIUS = 0.035  # Wheel radius in meters (3.5 cm)
         self.WHEEL_BASE = 0.343  # Axle track width in meters (20 cm)
 
