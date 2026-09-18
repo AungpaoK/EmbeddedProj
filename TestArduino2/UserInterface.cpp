@@ -18,6 +18,7 @@ namespace {
     {'*', '0', '#', 'D'}
   };
 
+  // ลำดับนี้ตรงกับบอร์ด PCF8574 ที่ใช้จริง
   byte rowPins[ROWS] = {7, 6, 5, 4};
   byte colPins[COLS] = {3, 2, 1, 0};
 
@@ -27,29 +28,6 @@ namespace {
   );
 
   LiquidCrystal_I2C lcd(LCD_ADDRESS, 16, 2);
-
-  void printJob(const DeliveryJob &job) {
-    lcd.print(F("S"));
-    lcd.print(job.shelf);
-    lcd.print(F(">T"));
-    lcd.print(job.table);
-  }
-
-  void showReady(const DeliveryJob jobs[], uint8_t jobCount) {
-    printJob(jobs[0]);
-
-    if (jobCount == 2) {
-      lcd.print(F(" "));
-      printJob(jobs[1]);
-    }
-
-    lcd.setCursor(0, 1);
-    if (jobCount < 2) {
-      lcd.print(F("A:Add #=Start"));
-    } else {
-      lcd.print(F("#=Start *=Reset"));
-    }
-  }
 }
 
 void uiBegin() {
@@ -59,99 +37,24 @@ void uiBegin() {
   lcd.init();
   lcd.backlight();
   lcd.clear();
+  uiPrintLine(0, "Delivery Robot");
+  uiPrintLine(1, "Waiting for Pi");
 }
 
 char uiReadKey() {
   return keypad.getKey();
 }
 
-void uiShowState(
-  DeliveryState state,
-  uint8_t selectedShelf,
-  uint8_t enteredTable,
-  const DeliveryJob jobs[],
-  uint8_t jobCount,
-  uint8_t currentJob
-) {
-  lcd.clear();
-
-  switch (state) {
-    case SELECT_SHELF:
-      lcd.print(F("Select shelf"));
-      lcd.setCursor(0, 1);
-      lcd.print(F("1/2 then B"));
-      break;
-
-    case WAIT_FOR_FOOD:
-      lcd.print(F("Place food S"));
-      lcd.print(selectedShelf);
-      lcd.setCursor(0, 1);
-      lcd.print(F("Waiting IR..."));
-      break;
-
-    case ENTER_TABLE:
-      lcd.print(F("Table for S"));
-      lcd.print(selectedShelf);
-      uiShowTableNumber(enteredTable);
-      break;
-
-    case READY_TO_START:
-      showReady(jobs, jobCount);
-      break;
-
-    case TRAVELLING:
-      lcd.print(F("Going T"));
-      lcd.print(jobs[currentJob].table);
-      lcd.print(F(" S"));
-      lcd.print(jobs[currentJob].shelf);
-      lcd.setCursor(0, 1);
-      lcd.print(F("Please wait..."));
-      break;
-
-    case WAIT_FOR_PICKUP:
-      lcd.print(F("Arrived T"));
-      lcd.print(jobs[currentJob].table);
-      lcd.setCursor(0, 1);
-      lcd.print(F("Take food S"));
-      lcd.print(jobs[currentJob].shelf);
-      break;
-
-    case RETURNING_HOME:
-      lcd.print(F("All delivered"));
-      lcd.setCursor(0, 1);
-      lcd.print(F("Returning home"));
-      break;
+void uiPrintLine(uint8_t row, const char text[]) {
+  if (row > 1) {
+    return;
   }
-}
 
-void uiShowSelectedShelf(uint8_t shelf) {
-  lcd.setCursor(0, 1);
-  lcd.print(F("Shelf "));
-  lcd.print(shelf);
-  lcd.print(F("  B=OK   "));
-}
+  lcd.setCursor(0, row);
+  lcd.print(F("                "));
+  lcd.setCursor(0, row);
 
-void uiShowTableNumber(uint8_t table) {
-  lcd.setCursor(0, 1);
-  lcd.print(F("Table:          "));
-  lcd.setCursor(7, 1);
-
-  if (table > 0) {
-    lcd.print(table);
-  } else {
-    lcd.print(F("_"));
+  for (uint8_t i = 0; i < 16 && text[i] != '\0'; i++) {
+    lcd.write(text[i]);
   }
-}
-
-void uiShowShelfAlreadyUsed() {
-  lcd.setCursor(0, 1);
-  lcd.print(F("Shelf used!     "));
-}
-
-void uiShowFoodMissing(uint8_t shelf) {
-  lcd.clear();
-  lcd.print(F("Food missing!"));
-  lcd.setCursor(0, 1);
-  lcd.print(F("Check shelf "));
-  lcd.print(shelf);
 }

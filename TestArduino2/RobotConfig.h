@@ -16,10 +16,9 @@ constexpr float STOP_DISTANCE_CM = 50.0;
 constexpr float CLEAR_DISTANCE_CM = 60.0;
 constexpr unsigned long ULTRASONIC_INTERVAL_MS = 100;
 
-// MAX7219 4-in-1
-constexpr uint8_t MAX7219_CS_PIN = 10;
-constexpr uint8_t MAX7219_COUNT = 4;
-constexpr uint8_t MAX7219_BRIGHTNESS = 2;
+// Manual Override Button (กด = LOW)
+constexpr uint8_t MANUAL_OVERRIDE_PIN = 12;
+constexpr unsigned long BUTTON_DEBOUNCE_MS = 50;
 
 // I2C
 constexpr uint8_t KEYPAD_ADDRESS = 0x20;

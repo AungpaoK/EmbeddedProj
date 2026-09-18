@@ -1,4 +1,4 @@
-#include "Sensors.h"
+  #include "Sensors.h"
 #include "RobotConfig.h"
 
 namespace {
@@ -10,6 +10,11 @@ namespace {
   bool foodRaw[2] = {false, false};
   bool foodChanged[2] = {false, false};
   unsigned long rawChangedTime[2] = {0, 0};
+
+  bool overrideRaw = false;
+  bool overrideStable = false;
+  bool overridePressed = false;
+  unsigned long overrideChangedTime = 0;
 
   unsigned long lastUltrasonicTime = 0;
 
@@ -51,6 +56,25 @@ namespace {
     updateOneIrSensor(1, readIrPin(IR_BOTTOM_PIN), now);
   }
 
+  void updateOverrideButton() {
+    unsigned long now = millis();
+    bool newRaw = (digitalRead(MANUAL_OVERRIDE_PIN) == LOW);
+
+    if (newRaw != overrideRaw) {
+      overrideRaw = newRaw;
+      overrideChangedTime = now;
+    }
+
+    if (overrideStable != overrideRaw &&
+        now - overrideChangedTime >= BUTTON_DEBOUNCE_MS) {
+      overrideStable = overrideRaw;
+
+      if (overrideStable) {
+        overridePressed = true;
+      }
+    }
+  }
+
   void updateUltrasonic() {
     unsigned long now = millis();
     if (now - lastUltrasonicTime < ULTRASONIC_INTERVAL_MS) {
@@ -80,17 +104,21 @@ void sensorsBegin() {
   pinMode(IR_BOTTOM_PIN, INPUT_PULLUP);
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
+  pinMode(MANUAL_OVERRIDE_PIN, INPUT_PULLUP);
   digitalWrite(TRIG_PIN, LOW);
 
   foodPresent[0] = readIrPin(IR_TOP_PIN);
   foodPresent[1] = readIrPin(IR_BOTTOM_PIN);
   foodRaw[0] = foodPresent[0];
   foodRaw[1] = foodPresent[1];
+  overrideStable = (digitalRead(MANUAL_OVERRIDE_PIN) == LOW);
+  overrideRaw = overrideStable;
 }
 
 void sensorsUpdate() {
   updateIrSensors();
   updateUltrasonic();
+  updateOverrideButton();
 }
 
 float sensorsGetDistanceCm() {
@@ -120,7 +148,13 @@ bool sensorsTakeFoodChanged(uint8_t shelf) {
   }
 
   uint8_t index = shelf - 1;
-  bool changed = foodChanged[index];
+  bool changed = foodChanged[index];  
   foodChanged[index] = false;
   return changed;
+}
+
+bool sensorsTakeOverridePressed() {
+  bool pressed = overridePressed;
+  overridePressed = false;
+  return pressed;
 }

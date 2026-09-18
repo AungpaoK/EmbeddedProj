@@ -13,5 +13,6 @@ bool sensorsFoodIsPresent(uint8_t shelf);
 // คืนค่า true เพียงครั้งเดียวเมื่อสถานะเปลี่ยน
 bool sensorsTakeObstacleChanged();
 bool sensorsTakeFoodChanged(uint8_t shelf);
+bool sensorsTakeOverridePressed();
 
 #endif

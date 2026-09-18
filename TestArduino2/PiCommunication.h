@@ -2,25 +2,15 @@
 #define PI_COMMUNICATION_H
 
 #include <Arduino.h>
-#include "RobotTypes.h"
 
 void communicationBegin();
-PiCommand communicationReadCommand();
+void communicationUpdate();
 
 void communicationSendReady();
+void communicationSendIr(uint8_t shelf, bool hasFood);
+void communicationSendKey(char key);
+void communicationSendOverride();
 void communicationSendObstacle(bool detected);
-void communicationSendFood(uint8_t shelf, bool present);
-void communicationSendFoodMissing(uint8_t shelf);
-void communicationSendDelivery(const DeliveryJob &job);
-void communicationSendDelivered(const DeliveryJob &job);
-void communicationSendReturnHome();
-void communicationSendReset();
-void communicationSendStatus(
-  float distanceCm,
-  bool obstacle,
-  bool topFood,
-  bool bottomFood,
-  DeliveryState state
-);
+void communicationSendDistance(float distanceCm);
 
 #endif

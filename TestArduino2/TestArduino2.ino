@@ -1,45 +1,41 @@
-// Arduino Uno #2 - โปรแกรมหลัก
-// รายละเอียดของแต่ละระบบแยกอยู่ในไฟล์ .h และ .cpp
+/*
+  Arduino Uno #2 - Shelf & User Interface Controller
+
+  หน้าที่ของบอร์ดนี้:
+    - อ่าน IR Sensor ชั้น 1 และ 2
+    - อ่าน Ultrasonic ตรวจสิ่งกีดขวาง
+    - อ่าน Keypad 4x4 ผ่าน PCF8574
+    - อ่านปุ่ม Manual Override
+    - แสดงข้อความ LCD ที่ได้รับจาก Raspberry Pi
+
+  Main Delivery FSM อยู่บน Raspberry Pi ไม่ได้อยู่ในบอร์ดนี้
+*/
 
 #include "RobotConfig.h"
-#include "RobotTypes.h"
 #include "Sensors.h"
 #include "UserInterface.h"
-#include "TurnIndicator.h"
 #include "PiCommunication.h"
-#include "DeliveryStateMachine.h"
 
 unsigned long lastStatusTime = 0;
 
-void handlePiCommand(PiCommand command) {
-  // คำสั่งทิศทางใช้ควบคุมไฟลูกศร
-  if (command == PI_LEFT) {
-    turnIndicatorSet(TURN_LEFT);
-  }
-  else if (command == PI_RIGHT) {
-    turnIndicatorSet(TURN_RIGHT);
-  }
-  else if (command == PI_FORWARD ||
-           command == PI_BACKWARD ||
-           command == PI_STOP) {
-    turnIndicatorSet(TURN_OFF);
-  }
-
-  // ARRIVED, HOME และ RESET ส่งให้ State Machine จัดการ
-  deliveryHandlePiCommand(command);
-}
-
-void sendChangedSensorValues() {
+void sendChangedInputs() {
   if (sensorsTakeObstacleChanged()) {
     communicationSendObstacle(sensorsHasObstacle());
   }
 
   for (uint8_t shelf = 1; shelf <= 2; shelf++) {
     if (sensorsTakeFoodChanged(shelf)) {
-      bool foodPresent = sensorsFoodIsPresent(shelf);
-      communicationSendFood(shelf, foodPresent);
-      deliveryHandleFoodChange(shelf, foodPresent);
+      communicationSendIr(shelf, sensorsFoodIsPresent(shelf));
     }
+  }
+
+  if (sensorsTakeOverridePressed()) {
+    communicationSendOverride();
+  }
+
+  char key = uiReadKey();
+  if (key) {
+    communicationSendKey(key);
   }
 }
 
@@ -50,35 +46,25 @@ void sendPeriodicStatus() {
   }
 
   lastStatusTime = now;
-  communicationSendStatus(
-    sensorsGetDistanceCm(),
-    sensorsHasObstacle(),
-    sensorsFoodIsPresent(1),
-    sensorsFoodIsPresent(2),
-    deliveryGetState()
-  );
+  communicationSendIr(1, sensorsFoodIsPresent(1));
+  communicationSendIr(2, sensorsFoodIsPresent(2));
+  communicationSendDistance(sensorsGetDistanceCm());
+  communicationSendObstacle(sensorsHasObstacle());
 }
 
 void setup() {
   communicationBegin();
   sensorsBegin();
   uiBegin();
-  turnIndicatorBegin();
-  deliveryBegin();
 
   communicationSendReady();
+  communicationSendIr(1, sensorsFoodIsPresent(1));
+  communicationSendIr(2, sensorsFoodIsPresent(2));
 }
 
 void loop() {
-  PiCommand command = communicationReadCommand();
-  if (command != PI_NO_COMMAND && command != PI_UNKNOWN) {
-    handlePiCommand(command);
-  }
-
+  communicationUpdate();
   sensorsUpdate();
-  sendChangedSensorValues();
-
-  deliveryUpdate();
-  turnIndicatorUpdate();
+  sendChangedInputs();
   sendPeriodicStatus();
 }

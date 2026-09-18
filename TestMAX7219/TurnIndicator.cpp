@@ -1,10 +1,9 @@
 #include "TurnIndicator.h"
 
-#include <Arduino.h>
 #include <MD_MAX72xx.h>
 #include <SPI.h>
 
-#include "RobotConfig.h"
+#include "DisplayConfig.h"
 
 namespace {
   MD_MAX72XX matrix(
