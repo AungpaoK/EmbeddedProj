@@ -69,9 +69,9 @@ class SlamBridgeNode(Node):
         self._odom_pub = self.create_publisher(OdomMsg, "/odom", 10)
         self._cmd_sub = self.create_subscription(Twist, "/cmd_vel", self._cmd_vel_callback, 10)
 
-        # Direction inversion settings (แก้ปัญหามอเตอร์กลับขั้ว / เดินถอยหลัง)
+        # Direction inversion settings (แก้ปัญหามอเตอร์กลับขั้ว / เดินถอยหลัง / เลี้ยวกลับด้าน)
         self._invert_linear = os.environ.get("INVERT_LINEAR", "1") == "1"
-        self._invert_angular = os.environ.get("INVERT_ANGULAR", "0") == "1"
+        self._invert_angular = os.environ.get("INVERT_ANGULAR", "1") == "1"
         logger.info(f"Drive Direction: InvertLinear={self._invert_linear}, InvertAngular={self._invert_angular}")
 
         # Broadcast Static TF: base_link -> laser_frame (ทิศทางของ LiDAR)
@@ -158,6 +158,8 @@ class SlamBridgeNode(Node):
 
         d = (dl + dr) / 2.0
         d_theta = (dr - dl) / WHEEL_BASE
+        if self._invert_angular:
+            d_theta = -d_theta
 
         self._x += d * math.cos(self._theta + d_theta / 2.0)
         self._y += d * math.sin(self._theta + d_theta / 2.0)

@@ -21,9 +21,11 @@ slam_toolbox:
     tf_buffer_duration: 30.0
     stack_size_to_use: 40000000
     enable_interactive_mode: true
-    minimum_time_interval: 0.2
+    minimum_time_interval: 0.1
     transform_publish_period: 0.02
-    map_update_interval: 2.0
+    map_update_interval: 1.0
+    minimum_travel_distance: 0.10
+    minimum_travel_heading: 0.15
 
     # Scan Matcher Tuning
     distance_variance_penalty: 0.5
