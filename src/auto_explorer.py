@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""
+auto_explorer.py — Autonomous Exploration & Map-Building Node
+=============================================================
+ระบบนำทางสำรวจพื้นที่อัตโนมัติเพื่อสร้างแผนที่ SLAM 2D รอบห้อง/ร้านอาหาร
+
+คุณสมบัติ:
+  - ขับสำรวจพื้นที่ว่างอัตโนมัติโดยไม่ต้องใช้ Joy/Teleop
+  - ระบบค้นหาช่องเปิด (Corridor & Open-Space Seeking)
+  - ระบบหลบหลีกสิ่งกีดขวางแบบ Reactive 360° จาก RPLiDAR
+  - ระบบแก้ทางตันและถอยหลังหนีมุมอับ (Stuck & Dead-End Recovery)
+  - ควบคุมความเร็วอย่างนุ่มนวล ป้องกันการลื่นไถลเพื่อรักษาคุณภาพ Odometry
+"""
+
+import math
+import time
+import logging
+from enum import Enum
+
+try:
+    import rclpy
+    from rclpy.node import Node
+    from geometry_msgs.msg import Twist
+    from sensor_msgs.msg import LaserScan
+    from nav_msgs.msg import Odometry
+    HAS_ROS2 = True
+except ImportError:
+    HAS_ROS2 = False
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("AutoExplorer")
+
+
+class ExplorerState(Enum):
+    CRUISE = 1     # วิ่งสำรวจไปข้างหน้าในทิศทางที่โล่ง
+    STEER = 2      # เลี้ยวปรับทิศทางตามช่องว่าง
+    ESCAPE = 3     # ถอยหลังและหมุนกลับตัวเมื่อเจอมุมตัน
+    ROTATE_SCAN = 4  # หมุนตัว 360° ที่จุดเปิดเพื่อกวาดเก็บรายละเอียดแผนที่
+
+
+class AutoExplorer(Node):
+    def __init__(self):
+        super().__init__("auto_explorer_node")
+
+        # พารามิเตอร์ความเร็วและระยะปลอดภัย
+        self.cruise_speed = 0.20        # m/s (ความเร็ววิ่งสำรวจ แนะนำ 0.18 - 0.25)
+        self.turn_speed = 0.55          # rad/s (~30 deg/s ป้องกัน Odometry สลิป)
+        self.front_stop_dist = 0.45     # เมตร: เริ่มหยุด/เลี้ยวเมื่อด้านหน้าใกล้กว่านี้
+        self.side_min_dist = 0.25       # เมตร: ระยะกันชนด้านข้าง
+        self.emergency_dist = 0.28      # เมตร: ถอยหลังทันทีถ้าประชิดเกินไป
+        self.chassis_clearance = 0.12   # เมตร: ตัดจุดสะท้อนตัวถังด้านใน
+
+        # State Machine
+        self.state = ExplorerState.CRUISE
+        self.escape_end_time = 0.0
+        self.escape_phase = 0
+        self.rotate_end_time = 0.0
+
+        # Odometry Progress Watchdog (ตรวจจับกรณีหุ่นยนต์ติดขัด)
+        self.last_pos_x = 0.0
+        self.last_pos_y = 0.0
+        self.last_progress_time = time.time()
+        self.current_x = 0.0
+        self.current_y = 0.0
+
+        # รอบการหมุน 360° เพื่อเปิดแมป
+        self.last_full_scan_time = time.time()
+        self.scan_interval = 25.0       # ทุกๆ 25 วินาทีให้หยุดหมุนรอบตัว 360° กวาดแมป
+
+        # ROS 2 Subscriptions & Publications
+        self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+        self.scan_sub = self.create_subscription(LaserScan, "/scan", self._scan_callback, 10)
+        self.odom_sub = self.create_subscription(Odometry, "/odom", self._odom_callback, 10)
+
+        # Loop ประมวลผลควบคุมที่ 10 Hz
+        self.timer = self.create_timer(0.1, self._control_loop)
+
+        # เก็บผลวิเคราะห์ LaserScan ล่าสุด
+        self.latest_scan_valid = False
+        self.front_dist = float("inf")
+        self.front_left_dist = float("inf")
+        self.front_right_dist = float("inf")
+        self.left_dist = float("inf")
+        self.right_dist = float("inf")
+        self.widest_direction = 0.0  # มุมที่เปิดโล่งที่สุด (-pi ถึง +pi)
+
+        logger.info("Auto Explorer initialized. Ready to map autonomously.")
+
+    def _odom_callback(self, msg: Odometry):
+        self.current_x = msg.pose.pose.position.x
+        self.current_y = msg.pose.pose.position.y
+
+        # ตรวจสอบว่าเคลื่อนที่จริงหรือไม่ (ป้องกันติดขัด / ล้อฟรี)
+        dist_moved = math.hypot(self.current_x - self.last_pos_x, self.current_y - self.last_pos_y)
+        if dist_moved > 0.08:
+            self.last_pos_x = self.current_x
+            self.last_pos_y = self.current_y
+            self.last_progress_time = time.time()
+
+    def _scan_callback(self, msg: LaserScan):
+        ranges = msg.ranges
+        num_points = len(ranges)
+        if num_points == 0:
+            return
+
+        angle_min = msg.angle_min
+        angle_inc = msg.angle_increment
+
+        # ตัวแปรจำแนกโซนระยะทาง (ตัดจุดสะท้อน < chassis_clearance)
+        zone_front = []
+        zone_fl = []
+        zone_fr = []
+        zone_left = []
+        zone_right = []
+
+        sectors = [[] for _ in range(8)]  # แบ่ง 8 ทิศเพื่อหาช่องเปิดกว้างที่สุด
+
+        for i, r in enumerate(ranges):
+            if math.isnan(r) or math.isinf(r) or r < self.chassis_clearance:
+                continue
+
+            angle = angle_min + i * angle_inc
+            # Normalize angle เป็น -pi ถึง +pi
+            angle = math.atan2(math.sin(angle), math.cos(angle))
+            deg = math.degrees(angle)
+
+            # แบ่งโซนด้านหน้าและด้านข้าง
+            if -25.0 <= deg <= 25.0:
+                zone_front.append(r)
+            elif 25.0 < deg <= 65.0:
+                zone_fl.append(r)
+            elif -65.0 <= deg < -25.0:
+                zone_fr.append(r)
+            elif 65.0 < deg <= 115.0:
+                zone_left.append(r)
+            elif -115.0 <= deg < -65.0:
+                zone_right.append(r)
+
+            # วิเคราะห์ 8 ทิศทางรอบตัวเพื่อหาทางเปิด
+            sector_idx = int((deg + 180.0) / 45.0) % 8
+            sectors[sector_idx].append(r)
+
+        # คำนวณระยะเฉลี่ย/ขั้นต่ำของแต่ละโซน
+        self.front_dist = min(zone_front) if zone_front else 10.0
+        self.front_left_dist = min(zone_fl) if zone_fl else 10.0
+        self.front_right_dist = min(zone_fr) if zone_fr else 10.0
+        self.left_dist = min(zone_left) if zone_left else 10.0
+        self.right_dist = min(zone_right) if zone_right else 10.0
+
+        # หา Sector ที่ลึกและเปิดโล่งที่สุดในครึ่งวงหน้า (-90° ถึง +90°)
+        best_dist = 0.0
+        best_angle = 0.0
+        for i, s in enumerate(sectors):
+            avg_dist = (sum(s) / len(s)) if s else 0.0
+            sector_center_deg = (i * 45.0) - 180.0 + 22.5
+            # ให้ความสำคัญกับทางข้างหน้า (-80° ถึง +80°)
+            if -80.0 <= sector_center_deg <= 80.0:
+                if avg_dist > best_dist:
+                    best_dist = avg_dist
+                    best_angle = math.radians(sector_center_deg)
+
+        self.widest_direction = best_angle
+        self.latest_scan_valid = True
+
+    def _control_loop(self):
+        if not self.latest_scan_valid:
+            return
+
+        now = time.time()
+        cmd = Twist()
+
+        # ------------------------------------------------------------------
+        # 0. Watchdog ตรวจจับหุ่นติดขัด (Stuck Recovery)
+        # ------------------------------------------------------------------
+        if self.state == ExplorerState.CRUISE and (now - self.last_progress_time > 4.5):
+            logger.warning("Stuck detected! Initiating escape maneuver...")
+            self.state = ExplorerState.ESCAPE
+            self.escape_phase = 1
+            self.escape_end_time = now + 1.8
+
+        # ------------------------------------------------------------------
+        # 1. หมุนตัว 360° ทุกระยะเวลาเพื่อกวาดแผนที่ให้เต็มห้อง
+        # ------------------------------------------------------------------
+        if self.state == ExplorerState.CRUISE and (now - self.last_full_scan_time > self.scan_interval):
+            if self.front_dist > 0.8:  # ทำเฉพาะเมื่ออยู่ในที่โล่ง
+                logger.info("Executing 360° panoramic scan for SLAM mapping...")
+                self.state = ExplorerState.ROTATE_SCAN
+                self.rotate_end_time = now + (2.0 * math.pi / self.turn_speed)
+                self.last_full_scan_time = now
+
+        # ------------------------------------------------------------------
+        # 2. State Machine การนำทางสำรวจ
+        # ------------------------------------------------------------------
+        if self.state == ExplorerState.ROTATE_SCAN:
+            if now < self.rotate_end_time:
+                cmd.linear.x = 0.0
+                cmd.angular.z = self.turn_speed
+            else:
+                self.state = ExplorerState.CRUISE
+
+        elif self.state == ExplorerState.ESCAPE:
+            # Phase 1: ถอยหลังช้าๆ ออกจากมุมตัน
+            if self.escape_phase == 1:
+                if now < self.escape_end_time:
+                    cmd.linear.x = -0.12
+                    cmd.angular.z = 0.0
+                else:
+                    # Phase 2: หมุนกลับตัว 90°-135° ไปทางที่โล่งกว่า
+                    self.escape_phase = 2
+                    turn_dir = 1.0 if self.left_dist > self.right_dist else -1.0
+                    self.escape_end_time = now + 2.2
+                    self.escape_turn_speed = turn_dir * self.turn_speed
+            elif self.escape_phase == 2:
+                if now < self.escape_end_time:
+                    cmd.linear.x = 0.0
+                    cmd.angular.z = self.escape_turn_speed
+                else:
+                    self.state = ExplorerState.CRUISE
+                    self.last_progress_time = now
+
+        elif self.state == ExplorerState.STEER:
+            # เลี้ยวปรับมุมหาช่องเปิด
+            turn_bias = 1.0 if self.front_left_dist > self.front_right_dist else -1.0
+            cmd.linear.x = 0.05
+            cmd.angular.z = turn_bias * self.turn_speed
+
+            if self.front_dist > self.front_stop_dist + 0.15:
+                self.state = ExplorerState.CRUISE
+
+        elif self.state == ExplorerState.CRUISE:
+            # ตรวจสอบระยะฉุกเฉิน
+            if self.front_dist < self.emergency_dist:
+                logger.warning(f"Emergency close distance ({self.front_dist:.2f}m)! Escaping...")
+                self.state = ExplorerState.ESCAPE
+                self.escape_phase = 1
+                self.escape_end_time = now + 1.5
+            elif self.front_dist < self.front_stop_dist:
+                # ข้างหน้าเริ่มติด เลี้ยวหาช่องว่าง
+                self.state = ExplorerState.STEER
+            else:
+                # ข้างหน้าโล่ง วิ่งไปข้างหน้าพร้อมเบี่ยงพวงมาลัยเข้าหาช่องกว้าง
+                # ชะลอความเร็วตามระยะทางข้างหน้า
+                speed_ratio = min(1.0, max(0.4, (self.front_dist - self.front_stop_dist) / 1.0))
+                cmd.linear.x = self.cruise_speed * speed_ratio
+
+                # เลี้ยวปรับหาช่องกว้างอย่างนุ่มนวล
+                # มีแรงผลักจากกำแพงด้านข้าง (Wall Repulsion) ป้องกันชนขอบ
+                side_repulsion = 0.0
+                if self.left_dist < self.side_min_dist:
+                    side_repulsion -= 0.35
+                if self.right_dist < self.side_min_dist:
+                    side_repulsion += 0.35
+
+                cmd.angular.z = (0.6 * self.widest_direction) + side_repulsion
+                cmd.angular.z = max(-self.turn_speed, min(self.turn_speed, cmd.angular.z))
+
+        self.cmd_pub.publish(cmd)
+
+    def stop(self):
+        stop_cmd = Twist()
+        self.cmd_pub.publish(stop_cmd)
+
+
+def main():
+    if not HAS_ROS2:
+        print("ERROR: ROS 2 is not available in this environment.")
+        return
+
+    rclpy.init()
+    node = AutoExplorer()
+
+    print("\n" + "=" * 60)
+    print("  🚀 Auto Explorer: Autonomous 2D SLAM Mapping Running")
+    print("=" * 60)
+    print("  - ระบบกำลังสำรวจพื้นที่ วิ่งหาช่องเปิด และหลบสิ่งกีดขวาง")
+    print("  - จะหยุดหมุน 360° ทุกๆ 25 วินาที เพื่อเก็บรายละเอียดแผนที่")
+    print("  - กด Ctrl + C ได้ทุกเมื่อเพื่อหยุดหุ่นยนต์")
+    print("=" * 60 + "\n")
+
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        logger.info("Stopping Auto Explorer...")
+    finally:
+        node.stop()
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
