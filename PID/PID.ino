@@ -29,7 +29,10 @@ unsigned long runStartTime = 0;
 
 // --- Speed & Acceleration Settings ---
 float currentRampedPWM = 0.0;
-const float MAX_TARGET_PWM = 255.0;  // SET PWM TARGET
+// Leave PWM headroom so the controller can balance both wheels without
+// driving either motor continuously at saturation.
+const float MAX_TARGET_PWM = 240.0;
+const float MAX_ACTUAL_SPEED_TICKS = 28.0;
 const float ACCEL_STEP = 3.0;        // Acceleration increment
 const float DECEL_STEP = 3.0;        // Deceleration decrement
 
@@ -48,9 +51,9 @@ float lastActualRightSpeed = 0.0;
 uint8_t runPhase = 0; // 0: Accelerating, 1: Holding, 2: Decelerating, 3: Pause
 
 // --- PID VALUES ---
-float Kp = 0;    // Proportional Gain
-float Ki = 0;    // Integral Gain
-float Kd = 0;     // Derivative Gain
+float Kp = 4.0;  // Proportional Gain
+float Ki = 1.0;  // Integral Gain
+float Kd = 0.0;  // Derivative Gain
 
 // Wheel synchronization: slow the faster wheel and assist the slower wheel.
 const float K_SYNC_P = 2.0;
@@ -104,7 +107,8 @@ void driveMotors(int leftPWM, int rightPWM) {
   } else {
     digitalWrite(IN3, LOW); digitalWrite(IN4, LOW);
   }
-  analogWrite(ENA, pwmL);
+  // The physical left motor is connected to L298N bridge B.
+  analogWrite(ENB, pwmL);
 
   // --- Right Motor ---
   int pwmR = constrain(abs(rightPWM), 0, 255);
@@ -115,7 +119,8 @@ void driveMotors(int leftPWM, int rightPWM) {
   } else {
     digitalWrite(IN1, LOW); digitalWrite(IN2, LOW);
   }
-  analogWrite(ENB, pwmR);
+  // The physical right motor is connected to L298N bridge A.
+  analogWrite(ENA, pwmR);
 }
 
 void setup() {
@@ -194,7 +199,8 @@ void loop() {
     }
 
     // 3. PID Speed Control Calculation
-    targetSpeedTicks = currentRampedPWM * 0.117647; 
+    targetSpeedTicks =
+        (currentRampedPWM / MAX_TARGET_PWM) * MAX_ACTUAL_SPEED_TICKS;
     float speedLeftError = targetSpeedTicks - actualLeftSpeed;
     float speedRightError = targetSpeedTicks - actualRightSpeed;
 
