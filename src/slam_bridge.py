@@ -69,6 +69,11 @@ class SlamBridgeNode(Node):
         self._odom_pub = self.create_publisher(OdomMsg, "/odom", 10)
         self._cmd_sub = self.create_subscription(Twist, "/cmd_vel", self._cmd_vel_callback, 10)
 
+        # Direction inversion settings (แก้ปัญหามอเตอร์กลับขั้ว / เดินถอยหลัง)
+        self._invert_linear = os.environ.get("INVERT_LINEAR", "1") == "1"
+        self._invert_angular = os.environ.get("INVERT_ANGULAR", "0") == "1"
+        logger.info(f"Drive Direction: InvertLinear={self._invert_linear}, InvertAngular={self._invert_angular}")
+
         # Broadcast Static TF: base_link -> laser_frame (ทิศทางของ LiDAR)
         self._broadcast_static_laser_tf()
 
@@ -88,17 +93,14 @@ class SlamBridgeNode(Node):
         t = TransformStamped()
         t.header.stamp = self.get_clock().now().to_msg()
         t.header.frame_id = "base_link"
-        t.child_frame_id = "laser"  # หรือ laser_frame ตามที่ sllidar_ros2 ปล่อย
+        t.child_frame_id = "laser"
 
         # ติดตั้งหน้ารถเยื้อง 15cm
         t.transform.translation.x = 0.15
         t.transform.translation.y = 0.0
         t.transform.translation.z = 0.10
 
-        # ใส่ Yaw Offset ของ LiDAR
         half_yaw = self._yaw_offset / 2.0
-        t.transform.rotation.x = 0.0
-        t.transform.rotation.y = 0.0
         t.transform.rotation.z = math.sin(half_yaw)
         t.transform.rotation.w = math.cos(half_yaw)
 
@@ -109,8 +111,9 @@ class SlamBridgeNode(Node):
         if not self._ser:
             return
 
-        v = msg.linear.x
-        w = msg.angular.z
+        # สลับทิศทางหากตั้งค่า Invert ไว้ (เช่น กด i แล้วถอยหลัง)
+        v = -msg.linear.x if self._invert_linear else msg.linear.x
+        w = -msg.angular.z if self._invert_angular else msg.angular.z
 
         v_l = v - (w * WHEEL_BASE / 2.0)
         v_r = v + (w * WHEEL_BASE / 2.0)
@@ -146,8 +149,10 @@ class SlamBridgeNode(Node):
             self._first_enc = False
             return
 
-        dl = (l_ticks - self._prev_l) * METERS_PER_TICK
-        dr = (r_ticks - self._prev_r) * METERS_PER_TICK
+        # สลับทิศ Odometry ให้ตรงกับการเคลื่อนที่จริงของหุ่น
+        sign = -1.0 if self._invert_linear else 1.0
+        dl = sign * (l_ticks - self._prev_l) * METERS_PER_TICK
+        dr = sign * (r_ticks - self._prev_r) * METERS_PER_TICK
         self._prev_l = l_ticks
         self._prev_r = r_ticks
 
