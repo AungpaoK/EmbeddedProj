@@ -48,13 +48,51 @@ echo ""
 source /opt/ros/jazzy/setup.bash 2>/dev/null || true
 source ~/ros2_ws/install/setup.bash 2>/dev/null || true
 
+BRIDGE_PID=""
+
+cleanup() {
+    echo ""
+    echo "🛑 กำลังตัดกำลังขับเคลื่อนและหยุดหุ่นยนต์..."
+    ros2 topic pub --once -w 0 /cmd_vel geometry_msgs/msg/Twist "{}" 2>/dev/null || true
+    if [ -n "$BRIDGE_PID" ]; then
+        echo "🔌 กำลังปิด Hardware Bridge (PID: $BRIDGE_PID)..."
+        kill -SIGINT "$BRIDGE_PID" 2>/dev/null || kill -9 "$BRIDGE_PID" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT INT TERM
+
+# หากเลือก Real Robot Mode
+if [ "$MODE_CHOICE" == "2" ]; then
+    # ตรวจสอบว่าอยู่บน Raspberry Pi ที่ต่อสาย Serial กับ Arduino หรือไม่
+    if [ -e "/dev/ttyACM0" ] || [ -e "/dev/ttyACM1" ] || [ -e "/dev/ttyUSB1" ]; then
+        if ! pgrep -f "slam_bridge.py" > /dev/null; then
+            echo "🔌 กำลังเปิดใช้งาน SLAM Hardware Bridge เพื่อเชื่อมต่อไปยัง Arduino..."
+            python3 src/slam_bridge.py > /tmp/slam_bridge.log 2>&1 &
+            BRIDGE_PID=$!
+            sleep 2.5
+            if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
+                echo "❌ ไม่สามารถเปิด slam_bridge.py ได้! บันทึกข้อผิดพลาด:"
+                cat /tmp/slam_bridge.log
+                exit 1
+            fi
+            echo "✓ เชื่อมต่อกับบอร์ด Arduino สำเร็จ (PID: $BRIDGE_PID)"
+        else
+            echo "✓ ตรวจพบ slam_bridge.py กำลังทำงานอยู่แล้ว"
+        fi
+    else
+        echo "🌐 Real Robot Mode (เชื่อมต่อผ่าน ROS 2 Network):"
+        echo "   กรุณาตรวจสอบว่าบนบอร์ด Raspberry Pi มี slam_bridge.py กำลังทำงานอยู่"
+    fi
+fi
+
 # หากรันบนเครื่อง PC ที่ไม่มี native rclpy ให้รันผ่าน Docker container โดยอัตโนมัติ
 if ! python3 -c "import rclpy" 2>/dev/null; then
     if command -v docker &>/dev/null && docker image inspect osrf/ros:jazzy-desktop &>/dev/null; then
         echo "🐳 ตรวจพบว่ารันบน PC Host (กำลังเปิดใช้งานผ่าน Docker osrf/ros:jazzy-desktop)..."
-        exec docker run -it --rm --net=host --ipc=host -v "$DIR:/workspace" osrf/ros:jazzy-desktop \
-            bash -c "source /opt/ros/jazzy/setup.bash && cd /workspace && exec python3 src/scenario_runner.py --scenario '$SCENARIO_CHOICE' $MODE_ARG"
+        docker run -it --rm --net=host --ipc=host -v "$DIR:/workspace" osrf/ros:jazzy-desktop \
+            bash -c "source /opt/ros/jazzy/setup.bash && cd /workspace && python3 src/scenario_runner.py --scenario '$SCENARIO_CHOICE' $MODE_ARG"
+        exit 0
     fi
 fi
 
-exec python3 src/scenario_runner.py --scenario "$SCENARIO_CHOICE" $MODE_ARG
+python3 src/scenario_runner.py --scenario "$SCENARIO_CHOICE" $MODE_ARG

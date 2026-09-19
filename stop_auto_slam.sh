@@ -9,8 +9,8 @@ echo "🛑 กำลังหยุดระบบ Auto SLAM..."
 
 # ส่งคำสั่งหยุดฉุกเฉินผ่าน /cmd_vel เพื่อความปลอดภัย ป้องกันหุ่นยนต์วิ่งค้าง
 if command -v ros2 &> /dev/null; then
-    source /opt/ros/jazzy/setup.bash 2>/dev/null
-    ros2 topic pub --once /cmd_vel geometry_msgs/msg/Twist "{}" 2>/dev/null &
+    source /opt/ros/jazzy/setup.bash 2>/dev/null || true
+    ros2 topic pub --once -w 0 /cmd_vel geometry_msgs/msg/Twist "{}" 2>/dev/null || true
 fi
 
 # ปิด tmux session

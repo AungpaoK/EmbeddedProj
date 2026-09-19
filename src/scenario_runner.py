@@ -68,6 +68,10 @@ class ScenarioRunnerNode(Node):
         self.target_v = 0.0
         self.target_w = 0.0
 
+        # Odometry statistics & heartbeat
+        self.odom_count = 0
+        self.last_odom_time = 0.0
+
         # ROS 2 Publishers & Broadcasters
         latched_qos = QoSProfile(
             depth=1,
@@ -79,15 +83,19 @@ class ScenarioRunnerNode(Node):
         self.marker_pub = self.create_publisher(MarkerArray, "/scenario_markers", latched_qos)
         self.path_pub = self.create_publisher(Path, "/robot_path", 10)
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
-        self.scan_pub = self.create_publisher(LaserScan, "/scan", 10)
-        self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
 
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
         self.static_tf_broadcaster = tf2_ros.StaticTransformBroadcaster(self)
 
-        # สำหรับโหมด Robot: รับพิกัดจริงจาก /odom
+        # แยกความรับผิดชอบระหว่าง Sim Mode และ Real Robot Mode
         if self.mode == "robot":
             self.odom_sub = self.create_subscription(Odometry, "/odom", self._real_odom_callback, 10)
+            self.odom_pub = None
+            self.scan_pub = None
+        else:
+            self.scan_pub = self.create_publisher(LaserScan, "/scan", 10)
+            self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
+            self.odom_sub = None
 
         # เส้นทางสะสม (Trail)
         self.path_msg = Path()
@@ -158,22 +166,25 @@ class ScenarioRunnerNode(Node):
         return grid
 
     def _broadcast_static_tf(self):
-        """Broadcast Static TF: map -> odom และ base_link -> laser"""
+        """Broadcast Static TF: map -> odom (และ base_link -> laser เฉพาะในโหมด sim)"""
         t_map = TransformStamped()
         t_map.header.stamp = self.get_clock().now().to_msg()
         t_map.header.frame_id = "map"
         t_map.child_frame_id = "odom"
         t_map.transform.rotation.w = 1.0
 
-        t_laser = TransformStamped()
-        t_laser.header.stamp = self.get_clock().now().to_msg()
-        t_laser.header.frame_id = "base_link"
-        t_laser.child_frame_id = "laser"
-        t_laser.transform.translation.x = 0.15
-        t_laser.transform.translation.z = 0.10
-        t_laser.transform.rotation.w = 1.0
+        transforms = [t_map]
+        if self.mode == "sim":
+            t_laser = TransformStamped()
+            t_laser.header.stamp = self.get_clock().now().to_msg()
+            t_laser.header.frame_id = "base_link"
+            t_laser.child_frame_id = "laser"
+            t_laser.transform.translation.x = 0.15
+            t_laser.transform.translation.z = 0.10
+            t_laser.transform.rotation.w = 1.0
+            transforms.append(t_laser)
 
-        self.static_tf_broadcaster.sendTransform([t_map, t_laser])
+        self.static_tf_broadcaster.sendTransform(transforms)
 
     def _publish_scenario_markers(self):
         """สร้าง 3D Visual Markers ใน RViz2 แสดง Kitchen, Junction, Table 1, Table 2"""
@@ -226,6 +237,8 @@ class ScenarioRunnerNode(Node):
         self.marker_pub.publish(markers)
 
     def _real_odom_callback(self, msg: Odometry):
+        self.odom_count += 1
+        self.last_odom_time = time.time()
         self.x = msg.pose.pose.position.x
         self.y = msg.pose.pose.position.y
         q = msg.pose.pose.orientation
@@ -234,7 +247,7 @@ class ScenarioRunnerNode(Node):
         self.theta = math.atan2(siny, cosy)
 
     def _simulation_step(self):
-        """Simulation Loop 20 Hz: จำลองจลนศาสตร์ และบรอดคาสต์ TF / Odom"""
+        """Simulation Loop 20 Hz: จำลองจลนศาสตร์ และบรอดคาสต์ TF / Odom (เฉพาะโหมด sim) และอัปเดต Trail"""
         now = self.get_clock().now().to_msg()
         dt = 0.05
 
@@ -244,43 +257,49 @@ class ScenarioRunnerNode(Node):
             self.y += self.target_v * math.sin(self.theta) * dt
             self.theta += self.target_w * dt
 
+            half_th = self.theta / 2.0
+            qz = math.sin(half_th)
+            qw = math.cos(half_th)
+
+            # 1. TF: odom -> base_footprint -> base_link
+            t_foot = TransformStamped()
+            t_foot.header.stamp = now
+            t_foot.header.frame_id = "odom"
+            t_foot.child_frame_id = "base_footprint"
+            t_foot.transform.translation.x = self.x
+            t_foot.transform.translation.y = self.y
+            t_foot.transform.rotation.z = qz
+            t_foot.transform.rotation.w = qw
+
+            t_base = TransformStamped()
+            t_base.header.stamp = now
+            t_base.header.frame_id = "base_footprint"
+            t_base.child_frame_id = "base_link"
+            t_base.transform.rotation.w = 1.0
+
+            self.tf_broadcaster.sendTransform([t_foot, t_base])
+
+            # 2. Publish /odom
+            odom = Odometry()
+            odom.header.stamp = now
+            odom.header.frame_id = "odom"
+            odom.child_frame_id = "base_footprint"
+            odom.pose.pose.position.x = self.x
+            odom.pose.pose.position.y = self.y
+            odom.pose.pose.orientation.z = qz
+            odom.pose.pose.orientation.w = qw
+            odom.twist.twist.linear.x = self.target_v
+            odom.twist.twist.angular.z = self.target_w
+            self.odom_pub.publish(odom)
+
+            # 3. จำลองสแกน LiDAR (/scan) สะท้อนกำแพงในโหมด sim
+            self._simulate_lidar_scan(now)
+
+        # 4. อัปเดตเส้นทาง Path Trail ใน RViz (ทั้ง sim และ real robot)
         half_th = self.theta / 2.0
         qz = math.sin(half_th)
         qw = math.cos(half_th)
-
-        # 1. TF: odom -> base_footprint -> base_link
-        t_foot = TransformStamped()
-        t_foot.header.stamp = now
-        t_foot.header.frame_id = "odom"
-        t_foot.child_frame_id = "base_footprint"
-        t_foot.transform.translation.x = self.x
-        t_foot.transform.translation.y = self.y
-        t_foot.transform.rotation.z = qz
-        t_foot.transform.rotation.w = qw
-
-        t_base = TransformStamped()
-        t_base.header.stamp = now
-        t_base.header.frame_id = "base_footprint"
-        t_base.child_frame_id = "base_link"
-        t_base.transform.rotation.w = 1.0
-
-        self.tf_broadcaster.sendTransform([t_foot, t_base])
-
-        # 2. Publish /odom
-        odom = Odometry()
-        odom.header.stamp = now
-        odom.header.frame_id = "odom"
-        odom.child_frame_id = "base_footprint"
-        odom.pose.pose.position.x = self.x
-        odom.pose.pose.position.y = self.y
-        odom.pose.pose.orientation.z = qz
-        odom.pose.pose.orientation.w = qw
-        odom.twist.twist.linear.x = self.target_v
-        odom.twist.twist.angular.z = self.target_w
-        self.odom_pub.publish(odom)
-
-        # 3. อัปเดตเส้นทาง Path Trail ใน RViz
-        if self.target_v != 0.0 or abs(self.target_w) > 0.05:
+        if abs(self.target_v) > 0.01 or abs(self.target_w) > 0.05:
             pose = PoseStamped()
             pose.header.stamp = now
             pose.header.frame_id = "map"
@@ -292,10 +311,6 @@ class ScenarioRunnerNode(Node):
             if len(self.path_msg.poses) > 500:
                 self.path_msg.poses.pop(0)
             self.path_pub.publish(self.path_msg)
-
-        # 4. จำลองสแกน LiDAR (/scan) สะท้อนกำแพงในโหมด sim
-        if self.mode == "sim":
-            self._simulate_lidar_scan(now)
 
     def _simulate_lidar_scan(self, now):
         """Raycasting แบบง่ายรอบตัว 360° จำลองระยะเสมือนจริง"""
@@ -336,12 +351,29 @@ class ScenarioRunnerNode(Node):
     # การควบคุมการเคลื่อนที่ตาม Waypoints (docs/scenario.md)
     # ------------------------------------------------------------------
     def drive_forward(self, distance: float, speed: float = 0.22):
-        """สั่งวิ่งตรงตามระยะทางที่กำหนด"""
-        print(f"  ⬆️ [Motion] เดินหน้า {distance:.2f} เมตร...")
-        start_x, start_y = self.x, self.y
+        """สั่งวิ่งตรงตามระยะทางที่กำหนด พร้อมระบบตรวจจับ Stall และ Timeout Watchdog"""
+        print(f"  ⬆️ [Motion] เดินหน้า {distance:.2f} เมตร (ความเร็ว {speed:.2f} m/s)...")
+        last_x, last_y = self.x, self.y
         traveled = 0.0
 
+        max_duration = (distance / max(speed, 0.05)) * 2.5 + 5.0
+        start_time = time.time()
+        last_progress_time = time.time()
+        last_traveled = 0.0
+
         while rclpy.ok() and traveled < distance:
+            now_t = time.time()
+            if now_t - start_time > max_duration:
+                print(f"  ⚠️ [Timeout] เดินหน้าครบกำหนดเวลา ({max_duration:.1f}s) เดินได้ {traveled:.2f}/{distance:.2f}m")
+                break
+
+            if traveled - last_traveled > 0.01:
+                last_progress_time = now_t
+                last_traveled = traveled
+            elif now_t - last_progress_time > 4.0:
+                print("  ⚠️ [Warning] ไม่พบการเปลี่ยนแปลงตำแหน่งจาก /odom เกิน 4 วินาที! มอเตอร์อาจติดขัดหรือเซนเซอร์ไม่ทำงาน")
+                last_progress_time = now_t
+
             self.target_v = speed
             self.target_w = 0.0
             if self.mode == "robot":
@@ -349,20 +381,41 @@ class ScenarioRunnerNode(Node):
                 cmd.linear.x = speed
                 self.cmd_pub.publish(cmd)
             time.sleep(0.05)
-            traveled = math.hypot(self.x - start_x, self.y - start_y)
+
+            step_dist = math.hypot(self.x - last_x, self.y - last_y)
+            traveled += step_dist
+            last_x, last_y = self.x, self.y
 
         self.stop_robot()
+        print(f"  ✓ [Motion] เดินหน้าสำเร็จ รวมระยะ {traveled:.2f}m (ตำแหน่งปัจจุบัน: X={self.x:.2f}, Y={self.y:.2f})")
 
     def turn_degrees(self, degrees: float, speed: float = 0.50):
-        """สั่งหมุนรอบตัวเอง (+ = ซ้าย/CCW, - = ขวา/CW)"""
+        """สั่งหมุนรอบตัวเอง (+ = ซ้าย/CCW, - = ขวา/CW) พร้อมระบบคำนวณแบบ Incremental Yaw"""
         direction = "ซ้าย (CCW)" if degrees > 0 else "ขวา (CW)"
         print(f"  🔄 [Motion] หมุน{direction} {abs(degrees):.1f}°...")
         target_rad = math.radians(abs(degrees))
-        start_theta = self.theta
-        rotated = 0.0
         w = speed if degrees > 0 else -speed
+        last_theta = self.theta
+        accumulated_rad = 0.0
 
-        while rclpy.ok() and rotated < target_rad:
+        max_duration = (target_rad / max(speed, 0.1)) * 2.5 + 5.0
+        start_time = time.time()
+        last_progress_time = time.time()
+        last_accum = 0.0
+
+        while rclpy.ok() and accumulated_rad < target_rad:
+            now_t = time.time()
+            if now_t - start_time > max_duration:
+                print(f"  ⚠️ [Timeout] หมุนครบกำหนดเวลา ({max_duration:.1f}s) หมุนได้ {math.degrees(accumulated_rad):.1f}/{abs(degrees):.1f}°")
+                break
+
+            if accumulated_rad - last_accum > math.radians(2.0):
+                last_progress_time = now_t
+                last_accum = accumulated_rad
+            elif now_t - last_progress_time > 4.0:
+                print("  ⚠️ [Warning] ไม่พบการหมุนจาก /odom เกิน 4 วินาที! โปรดตรวจดูว่าล้อหมุนหรือไม่")
+                last_progress_time = now_t
+
             self.target_v = 0.0
             self.target_w = w
             if self.mode == "robot":
@@ -370,20 +423,28 @@ class ScenarioRunnerNode(Node):
                 cmd.angular.z = w
                 self.cmd_pub.publish(cmd)
             time.sleep(0.05)
-            diff = abs(self.theta - start_theta)
-            # แก้ปัญหามุมข้าม -pi ถึง +pi
-            if diff > math.pi:
-                diff = abs(2.0 * math.pi - diff)
-            rotated = diff
+
+            # คำนวณ delta angle ที่ผ่านการ normalize [-pi, +pi]
+            d_th = self.theta - last_theta
+            while d_th > math.pi:
+                d_th -= 2.0 * math.pi
+            while d_th < -math.pi:
+                d_th += 2.0 * math.pi
+
+            accumulated_rad += abs(d_th)
+            last_theta = self.theta
 
         self.stop_robot()
+        print(f"  ✓ [Motion] หมุนสำเร็จ รวม {math.degrees(accumulated_rad):.1f}° (Yaw ปัจจุบัน: {math.degrees(self.theta):.1f}°)")
 
     def stop_robot(self):
+        """หยุดหุ่นยนต์และตัดกำลังขับเคลื่อน"""
         self.target_v = 0.0
         self.target_w = 0.0
         cmd = Twist()
-        self.cmd_pub.publish(cmd)
-        time.sleep(0.2)
+        for _ in range(3):
+            self.cmd_pub.publish(cmd)
+            time.sleep(0.05)
 
     def wait_customer_pickup(self, table_name: str, wait_sec: float = 3.0):
         """จำลองการรอลูกค้าหยิบอาหาร (IR Sensor / Manual Override)"""
@@ -402,6 +463,21 @@ class ScenarioRunnerNode(Node):
         print(f"  🤖 FOOD DELIVERY ROBOT — SCENARIO {self.scenario_id} RUNNER")
         print(f"  โหมดการทำงาน: {'🎮 SIMULATION (จำลอง 2D ใน RViz2)' if self.mode == 'sim' else '🚀 REAL ROBOT (สั่งหุ่นยนต์จริง)'}")
         print("=" * 60)
+
+        if self.mode == "robot":
+            print("  ⏳ [Hardware Preflight] กำลังตรวจสอบการเชื่อมต่อกับหุ่นยนต์ (/odom)...")
+            wait_start = time.time()
+            while rclpy.ok() and self.odom_count < 2:
+                time.sleep(0.2)
+                if time.time() - wait_start > 4.0:
+                    print("\n  ⚠️ [Hardware Warning] ยังไม่ได้รับข้อมูลจาก /odom เกิน 4 วินาที!")
+                    print("     คำแนะนำการตรวจสอบ:")
+                    print("     1. slam_bridge.py กำลังทำงานอยู่บน Raspberry Pi หรือไม่")
+                    print("     2. สาย USB ต่อเข้า Arduino #1 เสียบแน่นหรือไม่ (/dev/ttyACM0 หรือ /dev/ttyUSB1)")
+                    print("     (กำลังรอสัญญาณต่อไป... หากตรวจพบแล้วจะเริ่มปฏิบัติภารกิจทันที)\n")
+                    wait_start = time.time()
+
+            print(f"  ✓ [Hardware Connected] ตรวจพบข้อมูลจาก Arduino แล้ว! (x={self.x:.2f}, y={self.y:.2f}, th={math.degrees(self.theta):.1f}°)\n")
 
         if self.scenario_id == 1:
             self._execute_scenario_1()
