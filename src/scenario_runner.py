@@ -590,7 +590,11 @@ def main():
         node.stop_robot()
     finally:
         node.running = False
-        rclpy.shutdown()
+        if rclpy.ok():
+            try:
+                rclpy.shutdown()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":

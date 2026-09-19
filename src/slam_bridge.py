@@ -287,7 +287,11 @@ def main():
                 ser.close()
             except Exception:
                 pass
-        rclpy.shutdown()
+        if rclpy.ok():
+            try:
+                rclpy.shutdown()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
