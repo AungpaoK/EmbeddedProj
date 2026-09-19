@@ -15,7 +15,7 @@
  *
  * Pin Map (อ้างอิง robotconfig.h):
  *   D7=IN4, D8=IN1, D9=IN2, D10=ENA, D11=ENB, D12=IN3
- *   A0=RIGHT_ENC_A, A1=RIGHT_ENC_B, A4=LEFT_ENC_A, A5=LEFT_ENC_B
+ *   A0=RIGHT_ENC_A, A1=RIGHT_ENC_B, A3=LEFT_ENC_A, A2=LEFT_ENC_B
  */
 
 #include "robotconfig.h"
@@ -122,9 +122,9 @@ ISR(PCINT1_vect) {
     static uint8_t lastPortC = 0;
     uint8_t cur = PINC;
 
-    // Left: Phase A = PC4 (A4), Phase B = PC5 (A5)
-    if ((cur & (1 << PC4)) && !(lastPortC & (1 << PC4))) {
-        if (cur & (1 << PC5)) leftEncoderTicks--;
+    // Left: Phase A = PC3 (A3), Phase B = PC2 (A2)
+    if ((cur & (1 << PC3)) && !(lastPortC & (1 << PC3))) {
+        if (cur & (1 << PC2)) leftEncoderTicks--;
         else                   leftEncoderTicks++;
     }
     // Right: Phase A = PC0 (A0), Phase B = PC1 (A1)
@@ -136,10 +136,10 @@ ISR(PCINT1_vect) {
 }
 
 void setupEncoders() {
-    DDRC  &= ~0b00110011;
-    PORTC |= (1 << PC0) | (1 << PC1) | (1 << PC4) | (1 << PC5);
+    DDRC  &= ~((1 << PC0) | (1 << PC1) | (1 << PC2) | (1 << PC3));
+    PORTC |= (1 << PC0) | (1 << PC1) | (1 << PC2) | (1 << PC3);
     PCICR |= (1 << PCIE1);
-    PCMSK1 |= (1 << PCINT8) | (1 << PCINT12);
+    PCMSK1 |= (1 << PCINT8) | (1 << PCINT11);
 }
 
 // ============================================================
