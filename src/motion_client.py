@@ -69,6 +69,38 @@ class MotionClient:
             logger.error(f"[Motion] Failed to send STOP: {e}")
 
     # ------------------------------------------------------------------
+    # Continuous Velocity Commands (ROS 2 cmd_vel Streaming)
+    # ------------------------------------------------------------------
+
+    def set_wheel_velocities(self, v_left: float, v_right: float) -> bool:
+        """
+        ส่งคำสั่งความเร็วล้อซ้ายและขวา (m/s) แบบ Continuous (Non-blocking)
+        ตัวอย่าง: V:0.250,0.250
+        """
+        cmd = f"V:{v_left:.3f},{v_right:.3f}\n"
+        try:
+            self._ser.write(cmd.encode("utf-8"))
+            self._ser.flush()
+            return True
+        except serial.SerialException as e:
+            logger.error(f"[Motion] Failed to send velocity: {e}")
+            return False
+
+    def drive_continuous(self, linear_v: float, angular_w: float, wheel_base: float = 0.343) -> bool:
+        """
+        แปลง (linear_v m/s, angular_w rad/s) เป็นความเร็วล้อ Differential Drive
+        v_left  = linear_v - (angular_w * wheel_base / 2.0)
+        v_right = linear_v + (angular_w * wheel_base / 2.0)
+        """
+        v_left  = linear_v - (angular_w * wheel_base / 2.0)
+        v_right = linear_v + (angular_w * wheel_base / 2.0)
+        return self.set_wheel_velocities(v_left, v_right)
+
+    def stop_continuous(self) -> bool:
+        """หยุดมอเตอร์ในโหมด Continuous ด้วยการส่ง V:0.000,0.000"""
+        return self.set_wheel_velocities(0.0, 0.0)
+
+    # ------------------------------------------------------------------
     # Composite Maneuvers (ประกอบจากคำสั่งพื้นฐาน)
     # ------------------------------------------------------------------
 

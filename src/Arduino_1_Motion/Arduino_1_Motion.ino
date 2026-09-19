@@ -98,13 +98,19 @@ PIDController pidRight;
 // ============================================================
 // Command FSM
 // ============================================================
-enum MotionCommand { CMD_IDLE, CMD_FORWARD, CMD_TURN };
+enum MotionCommand { CMD_IDLE, CMD_FORWARD, CMD_TURN, CMD_VELOCITY };
 
 MotionCommand currentCmd    = CMD_IDLE;
 float         cmdTarget     = 0.0;  // เมตร (FORWARD) หรือ องศา (TURN)
 float         rampedSpeed   = 0.0;
 long          startLeftTicks  = 0;
 long          startRightTicks = 0;
+
+// Continuous Velocity Control (m/s) & Safety Watchdog
+float         targetLeftSpeed   = 0.0f;
+float         targetRightSpeed  = 0.0f;
+unsigned long lastVelocityCmdTime = 0;
+const unsigned long VELOCITY_TIMEOUT_MS = 300;  // ตัดมอเตอร์ทันทีหาก Serial ขาดหายเกิน 300ms
 
 unsigned long lastControlTime  = 0;
 unsigned long lastEncoderPrint = 0;
@@ -204,6 +210,20 @@ void parseSerialCommand(const String &line) {
         return;
     }
 
+    // Continuous Velocity: V:<v_left>,<v_right> (e.g. V:0.250,0.250)
+    if (line.startsWith("V:")) {
+        int commaIdx = line.indexOf(',');
+        if (commaIdx > 2) {
+            targetLeftSpeed     = line.substring(2, commaIdx).toFloat();
+            targetRightSpeed    = line.substring(commaIdx + 1).toFloat();
+            currentCmd          = CMD_VELOCITY;
+            lastVelocityCmdTime = millis();
+            return;
+        }
+        Serial.println("STATUS:ERROR");
+        return;
+    }
+
     // Unknown command
     Serial.println("STATUS:ERROR");
 }
@@ -274,6 +294,25 @@ void executeTurn(float dt) {
     driveMotors((int)pwmL, (int)pwmR);
 }
 
+void executeVelocity(float dt) {
+    // Safety Watchdog: หากไม่ได้รับคำสั่ง V: ภายใน 300ms ให้หยุดมอเตอร์ทันที
+    if (millis() - lastVelocityCmdTime > VELOCITY_TIMEOUT_MS) {
+        targetLeftSpeed  = 0.0f;
+        targetRightSpeed = 0.0f;
+        driveMotors(0, 0);
+        currentCmd = CMD_IDLE;
+        return;
+    }
+
+    long leftTicks, rightTicks;
+    readTicks(leftTicks, rightTicks);
+
+    float pwmL = pidLeft.compute(leftTicks,  targetLeftSpeed, dt);
+    float pwmR = pidRight.compute(rightTicks, targetRightSpeed, dt);
+
+    driveMotors((int)pwmL, (int)pwmR);
+}
+
 // ============================================================
 // setup / loop
 // ============================================================
@@ -297,9 +336,10 @@ void loop() {
         lastControlTime = now;
 
         switch (currentCmd) {
-            case CMD_FORWARD: executeForward(dt); break;
-            case CMD_TURN:    executeTurn(dt);    break;
-            case CMD_IDLE:    /* do nothing */    break;
+            case CMD_FORWARD:  executeForward(dt);  break;
+            case CMD_TURN:     executeTurn(dt);     break;
+            case CMD_VELOCITY: executeVelocity(dt); break;
+            case CMD_IDLE:     driveMotors(0, 0);   break;
         }
     }
 

@@ -1,26 +1,31 @@
 #!/usr/bin/env python3
 """
-main.py — Food Delivery Robot Entry Point
-==========================================
-จุดเริ่มต้นโปรแกรม: เชื่อมต่อ Serial, เริ่ม Background Threads แล้ว run Main FSM
+main.py — Food Delivery Robot Entry Point (Unified ROS 2 Hybrid System)
+=======================================================================
+จุดเริ่มต้นโปรแกรม: เชื่อมต่อ Serial (Dual Arduino), เริ่มต้นระบบ ROS 2 (LiDAR / SLAM)
+เปิดใช้งาน LiDAR Safety Guard และ Continuous Waypoint Controller แล้วรัน Main FSM
 
 การรัน:
     python3 main.py
 
 ตัวเลือก Environment Variable:
-    MOTION_PORT  — Serial port ของ Arduino #1  (default: /dev/ttyUSB0)
-    SHELF_PORT   — Serial port ของ Arduino #2  (default: /dev/ttyUSB1)
-    BAUD_RATE    — Baud rate ทั้งสอง port       (default: 115200)
-    LOG_LEVEL    — DEBUG / INFO / WARNING        (default: INFO)
+    MOTION_PORT        — Serial port ของ Arduino #1  (default: /dev/ttyUSB0)
+    SHELF_PORT         — Serial port ของ Arduino #2  (default: /dev/ttyUSB1)
+    BAUD_RATE          — Baud rate ทั้งสอง port       (default: 115200)
+    LIDAR_YAW_OFFSET   — องศาชดเชยการวาง LiDAR เทียบกับหน้ารถ (default: 0.0)
+    LIDAR_STOP_DIST    — ระยะหยุดฉุกเฉิน LiDAR (เมตร, default: 0.50)
+    LOG_LEVEL          — DEBUG / INFO / WARNING        (default: INFO)
 """
 
 import logging
 import os
 import sys
+import math
 import signal
+import threading
 import serial
 
-# Local imports (ต้องรันจาก src/ หรือเพิ่ม src/ ใน PYTHONPATH)
+# Local imports
 from config import (
     MOTION_SERIAL_PORT,
     SHELF_SERIAL_PORT,
@@ -31,6 +36,18 @@ from odometry import Odometry
 from motion_client import MotionClient
 from shelf_client import ShelfClient
 from delivery_fsm import DeliveryFSM
+from lidar_safety import LidarSafetyGuard
+from waypoint_controller import WaypointController
+
+# Optional ROS 2 Integration
+try:
+    import rclpy
+    from rclpy.node import Node
+    from sensor_msgs.msg import LaserScan
+    from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped
+    HAS_ROS2 = True
+except ImportError:
+    HAS_ROS2 = False
 
 
 # ===========================================================
@@ -60,14 +77,54 @@ def _open_serial(port: str, baud: int, timeout: float, label: str) -> serial.Ser
 
 
 # ===========================================================
+# ROS 2 Bridge Node (Background Subscriptions)
+# ===========================================================
+if HAS_ROS2:
+    class DeliveryRobotRosNode(Node):
+        def __init__(self, safety_guard: LidarSafetyGuard):
+            super().__init__("delivery_robot_node")
+            self._safety = safety_guard
+            self.latest_slam_pose = None
+
+            # 1. Subscribe /scan จาก sllidar_ros2
+            self._scan_sub = self.create_subscription(
+                LaserScan,
+                "/scan",
+                self._safety.ros2_scan_callback,
+                10,
+            )
+
+            # 2. Subscribe /pose จาก SLAM Toolbox หรือ AMCL
+            self._pose_sub = self.create_subscription(
+                PoseWithCovarianceStamped,
+                "/amcl_pose",
+                self._pose_callback,
+                10,
+            )
+            self.get_logger().info("ROS 2 DeliveryRobotRosNode initialized.")
+
+        def _pose_callback(self, msg: PoseWithCovarianceStamped):
+            pos = msg.pose.pose.position
+            q = msg.pose.pose.orientation
+            # แปลง Quaternion เป็น Yaw (rad)
+            siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+            cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+            yaw = math.atan2(siny_cosp, cosy_cosp)
+            self.latest_slam_pose = (pos.x, pos.y, yaw)
+
+
+# ===========================================================
 # Graceful Shutdown Handler
 # ===========================================================
 def _make_shutdown_handler(odom: Odometry, shelf: ShelfClient, motion: MotionClient):
     def _handler(sig, frame):
-        print("\n[main] Shutting down... sending STOP")
+        print("\n[main] Shutting down... stopping motors")
+        motion.stop_continuous()
         motion.stop()
         odom.stop()
         shelf.stop()
+        if HAS_ROS2 and rclpy.ok():
+            rclpy.shutdown()
         sys.exit(0)
     return _handler
 
@@ -83,13 +140,17 @@ def main() -> None:
     motion_port = os.environ.get("MOTION_PORT", MOTION_SERIAL_PORT)
     shelf_port  = os.environ.get("SHELF_PORT",  SHELF_SERIAL_PORT)
     baud        = int(os.environ.get("BAUD_RATE", SERIAL_BAUD))
+    yaw_offset  = float(os.environ.get("LIDAR_YAW_OFFSET", "0.0"))
+    stop_dist   = float(os.environ.get("LIDAR_STOP_DIST", "0.50"))
 
     logger.info("=" * 55)
-    logger.info("  Food Delivery Robot — Booting up")
+    logger.info("  Food Delivery Robot — Unified ROS 2 Hybrid")
     logger.info("=" * 55)
-    logger.info(f"  Motion Arduino : {motion_port}")
-    logger.info(f"  Shelf Arduino  : {shelf_port}")
-    logger.info(f"  Baud Rate      : {baud}")
+    logger.info(f"  Motion Arduino   : {motion_port}")
+    logger.info(f"  Shelf Arduino    : {shelf_port}")
+    logger.info(f"  LiDAR Yaw Offset : {yaw_offset}°")
+    logger.info(f"  LiDAR Stop Dist  : {stop_dist} m")
+    logger.info(f"  ROS 2 Status     : {'Available' if HAS_ROS2 else 'Standalone / No ROS 2'}")
 
     # --- Open Serial Connections ---
     motion_ser = _open_serial(motion_port, baud, SERIAL_TIMEOUT, "Motion")
@@ -99,6 +160,36 @@ def main() -> None:
     odometry = Odometry(motion_ser)
     motion   = MotionClient(motion_ser)
     shelf    = ShelfClient(shelf_ser)
+
+    # --- LiDAR Safety Guard ---
+    safety_guard = LidarSafetyGuard(
+        stop_distance_m=stop_dist,
+        front_cone_deg=35.0,
+        min_clearance_m=0.12,
+        yaw_offset_deg=yaw_offset,
+    )
+
+    # --- ROS 2 Node Spin (Optional) ---
+    ros_node = None
+    if HAS_ROS2:
+        rclpy.init()
+        ros_node = DeliveryRobotRosNode(safety_guard)
+        ros_thread = threading.Thread(target=rclpy.spin, args=(ros_node,), daemon=True)
+        ros_thread.start()
+        logger.info("[main] ROS 2 background subscriber thread started.")
+
+    # --- Pose Provider (SLAM Pose with Odometry Fallback) ---
+    def get_pose():
+        if ros_node and ros_node.latest_slam_pose:
+            return ros_node.latest_slam_pose
+        return odometry.pose
+
+    # --- Closed-Loop Waypoint Controller ---
+    waypoint_ctrl = WaypointController(
+        motion=motion,
+        safety_guard=safety_guard,
+        pose_provider=get_pose,
+    )
 
     # --- Register Ctrl+C Shutdown ---
     signal.signal(signal.SIGINT, _make_shutdown_handler(odometry, shelf, motion))
@@ -110,16 +201,25 @@ def main() -> None:
     logger.info("[main] All subsystems started. Launching Main FSM.")
 
     # --- Run Main FSM (blocks forever) ---
-    fsm = DeliveryFSM(motion=motion, odometry=odometry, shelf=shelf)
+    fsm = DeliveryFSM(
+        motion=motion,
+        odometry=odometry,
+        shelf=shelf,
+        waypoint_controller=waypoint_ctrl,
+    )
     try:
         fsm.run()
     except Exception as e:
         logger.exception(f"[main] Unhandled FSM exception: {e}")
+        motion.stop_continuous()
         motion.stop()
     finally:
         logger.info("[main] Cleaning up...")
+        motion.stop_continuous()
         odometry.stop()
         shelf.stop()
+        if HAS_ROS2 and rclpy.ok():
+            rclpy.shutdown()
         motion_ser.close()
         shelf_ser.close()
         logger.info("[main] Shutdown complete.")

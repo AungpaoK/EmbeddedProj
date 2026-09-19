@@ -73,10 +73,12 @@ class DeliveryFSM:
         motion: MotionClient,
         odometry: Odometry,
         shelf: ShelfClient,
+        waypoint_controller=None,
     ) -> None:
         self._motion = motion
         self._odom = odometry
         self._shelf = shelf
+        self._waypoint_ctrl = waypoint_controller
 
         self._state = State.SELECT_FLOOR
 
@@ -236,30 +238,47 @@ class DeliveryFSM:
         self._shelf.lcd_print(0, f"Delivering T{order.table_id}")
         self._shelf.lcd_print(1, f"Shelf {order.shelf}...")
 
-        x, y, _ = self._odom.pose
-
-        # 1. วิ่งตรงไปยัง Junction (ถ้ายังไม่ถึง)
-        dist_to_junction = JUNCTION_X - x
-        if dist_to_junction > 0.05:
-            ok = self._motion.forward(dist_to_junction)
+        # --- ใช้ Continuous WaypointController (ถ้ามี) ---
+        if self._waypoint_ctrl is not None:
+            # 1. นำทางไปยัง Junction (X = JUNCTION_X, Y = 0.0)
+            ok = self._waypoint_ctrl.navigate_to(JUNCTION_X, 0.0)
             if not ok:
-                logger.error("[FSM] Failed to reach junction. Stopping.")
+                logger.error("[FSM] WaypointController failed to reach junction.")
+                self._motion.stop_continuous()
+                return
+
+            # 2. นำทางเข้าเทียบโต๊ะ (X = JUNCTION_X, Y = target_y, Heading = turn_deg)
+            ok = self._waypoint_ctrl.navigate_to(JUNCTION_X, target_y, target_theta_deg=turn_deg)
+            if not ok:
+                logger.error(f"[FSM] WaypointController failed to reach Table {order.table_id}.")
+                self._motion.stop_continuous()
+                return
+        else:
+            # --- Fallback เป็น Discrete Sequence เดิม ---
+            x, y, _ = self._odom.pose
+
+            # 1. วิ่งตรงไปยัง Junction (ถ้ายังไม่ถึง)
+            dist_to_junction = JUNCTION_X - x
+            if dist_to_junction > 0.05:
+                ok = self._motion.forward(dist_to_junction)
+                if not ok:
+                    logger.error("[FSM] Failed to reach junction. Stopping.")
+                    self._motion.stop()
+                    return
+
+            # 2. เลี้ยวเข้าทิศโต๊ะ
+            ok = self._motion.turn(turn_deg)
+            if not ok:
+                logger.error(f"[FSM] Turn failed. Aborting delivery to table {order.table_id}.")
                 self._motion.stop()
                 return
 
-        # 2. เลี้ยวเข้าทิศโต๊ะ
-        ok = self._motion.turn(turn_deg)
-        if not ok:
-            logger.error(f"[FSM] Turn failed. Aborting delivery to table {order.table_id}.")
-            self._motion.stop()
-            return
-
-        # 3. วิ่งตรงเข้าหาโต๊ะ
-        ok = self._motion.forward(abs(target_y))
-        if not ok:
-            logger.error(f"[FSM] Forward to table {order.table_id} failed.")
-            self._motion.stop()
-            return
+            # 3. วิ่งตรงเข้าหาโต๊ะ
+            ok = self._motion.forward(abs(target_y))
+            if not ok:
+                logger.error(f"[FSM] Forward to table {order.table_id} failed.")
+                self._motion.stop()
+                return
 
         logger.info(f"[FSM] Arrived at Table {order.table_id}.")
         self._shelf.lcd_print(0, f"Arrived T{order.table_id}!")
@@ -326,28 +345,37 @@ class DeliveryFSM:
         self._shelf.lcd_print(0, "Returning home...")
         self._shelf.lcd_print(1, "Please wait")
 
-        x, y, _ = self._odom.pose
+        # --- ใช้ Continuous WaypointController (ถ้ามี) ---
+        if self._waypoint_ctrl is not None:
+            # 1. วิ่งกลับมายัง Junction (X = JUNCTION_X, Y = 0.0)
+            self._waypoint_ctrl.navigate_to(JUNCTION_X, 0.0)
+            # 2. วิ่งเข้า Serve Station (X = 0.0, Y = 0.0) และหันหน้าออก (0.0°)
+            self._waypoint_ctrl.navigate_to(0.0, 0.0, target_theta_deg=0.0)
+            self._odom.reset()
+        else:
+            # --- Fallback เป็น Discrete Sequence เดิม ---
+            x, y, _ = self._odom.pose
 
-        # 1. U-Turn ที่โต๊ะสุดท้าย (หรือตำแหน่งปัจจุบัน)
-        self._motion.u_turn()
+            # 1. U-Turn ที่โต๊ะสุดท้าย (หรือตำแหน่งปัจจุบัน)
+            self._motion.u_turn()
 
-        # 2. วิ่งกลับจาก Y-offset ไปยัง Junction (Y = 0)
-        dist_back_y = abs(y)
-        if dist_back_y > 0.05:
-            self._motion.forward(dist_back_y)
+            # 2. วิ่งกลับจาก Y-offset ไปยัง Junction (Y = 0)
+            dist_back_y = abs(y)
+            if dist_back_y > 0.05:
+                self._motion.forward(dist_back_y)
 
-        # 3. เลี้ยวขวา 90° มุ่งหน้ากลับ Station (−X direction)
-        self._motion.turn(-90.0)
+            # 3. เลี้ยวขวา 90° มุ่งหน้ากลับ Station (−X direction)
+            self._motion.turn(-90.0)
 
-        # 4. วิ่งตรงกลับ Station (X = 0)
-        dist_to_home = JUNCTION_X
-        self._motion.forward(dist_to_home)
+            # 4. วิ่งตรงกลับ Station (X = 0)
+            dist_to_home = JUNCTION_X
+            self._motion.forward(dist_to_home)
 
-        # 5. U-Turn ที่ Station เพื่อหันหน้าออก (พร้อมรับงานรอบถัดไป)
-        self._motion.u_turn()
+            # 5. U-Turn ที่ Station เพื่อหันหน้าออก (พร้อมรับงานรอบถัดไป)
+            self._motion.u_turn()
 
-        # 6. Reset Odometry กลับเป็น (0, 0, 0)
-        self._odom.reset()
+            # 6. Reset Odometry กลับเป็น (0, 0, 0)
+            self._odom.reset()
 
         logger.info("[FSM] Returned to Serve Station. Ready for next round.")
         self._shelf.lcd_print(0, "Home! Ready.")
