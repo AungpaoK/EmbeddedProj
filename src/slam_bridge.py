@@ -115,7 +115,8 @@ class SlamBridgeNode(Node):
             t.transform.rotation.z = math.sin(half_yaw)
             t.transform.rotation.w = math.cos(half_yaw)
             transforms.append(t)
-        self._static_tf_broadcaster.sendTransforms(transforms)
+        for t in transforms:
+            self._static_tf_broadcaster.sendTransform(t)
 
     def _cmd_vel_callback(self, msg: Twist):
         """รับความเร็วจาก teleop แล้วส่ง V:left,right ให้ Arduino"""
