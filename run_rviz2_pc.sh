@@ -2,40 +2,55 @@
 # ==============================================================================
 # run_rviz2_pc.sh — รัน RViz2 บนเครื่อง PC ผ่าน Docker เพื่อดึงภาพ Map/Scan จาก Raspberry Pi
 # ==============================================================================
-# ทำไมต้องรันบน PC:
-#   1. ไม่กิน CPU/RAM ของ Raspberry Pi 4 (SLAM + LiDAR ต้องการทรัพยากรสูง)
-#   2. เรนเดอร์ 3D ลื่นไหล 60 FPS ด้วยการ์ดจอ PC
-#   3. แค่อยู่ใน WiFi เดียวกัน ROS 2 DDS จะค้นหาเจออัตโนมัติ
-# ==============================================================================
-
 set -e
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RVIZ_CONFIG="${DIR}/src/slam_view.rviz"
+PI_IP="${PI_IP:-172.30.81.226}"
+PEERS_FILE="$HOME/.fastdds_peers.xml"
 
-echo "=== [Garvis] เตรียมรัน RViz2 บนคอมพิวเตอร์ ==="
+cat <<EOF > "$PEERS_FILE"
+<?xml version="1.0" encoding="UTF-8" ?>
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+    <profiles>
+        <participant profile_name="default_profile" is_default_profile="true">
+            <rtps>
+                <builtin>
+                    <initialPeersList>
+                        <locator>
+                            <udpv4>
+                                <address>${PI_IP}</address>
+                            </udpv4>
+                        </locator>
+                    </initialPeersList>
+                </builtin>
+            </rtps>
+        </participant>
+    </profiles>
+</dds>
+EOF
 
-# 1. อนุญาตสิทธิ์ X11 เพื่อให้ Docker เรนเดอร์หน้าต่าง GUI ออกจอได้
-echo "1. อนุญาตสิทธิ์การแสดงผล X11..."
+echo "=== [Garvis] เริ่มต้น RViz2 (Unicast เชื่อมตรงไปยัง Raspberry Pi $PI_IP) ==="
+
 xhost +local:root > /dev/null 2>&1 || true
 
-# 2. ตรวจสอบว่ามี Docker พร้อมหรือไม่
-if ! command -v docker &> /dev/null; then
-    echo "ERROR: ไม่พบ docker ในเครื่อง กรุณาติดตั้ง docker ก่อน"
-    exit 1
+GPU_ARGS=()
+if [ -d "/dev/dri" ]; then
+    GPU_ARGS=(--device /dev/dri)
 fi
 
-echo "2. กำลังสตาร์ต RViz2 ใน Docker (อิง ROS 2 Jazzy)..."
-echo "   (หากรันครั้งแรก ระบบจะดาวน์โหลด image อัตโนมัติ)"
-
-# 3. รัน RViz2 ด้วย host network และ share display
 docker run -it --rm \
   --net=host \
   --ipc=host \
   --privileged \
-  -e DISPLAY="${DISPLAY}" \
+  "${GPU_ARGS[@]}" \
+  -e DISPLAY="${DISPLAY:-:0}" \
+  -e WAYLAND_DISPLAY="${WAYLAND_DISPLAY}" \
+  -e XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
   -e ROS_DOMAIN_ID=0 \
+  -e FASTRTPS_DEFAULT_PROFILES_FILE="$PEERS_FILE" \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  -v "$HOME/.rviz2:/root/.rviz2:rw" \
   -v "${DIR}:/workspace" \
   osrf/ros:jazzy-desktop \
   bash -c "source /opt/ros/jazzy/setup.bash && rviz2 -d /workspace/src/slam_view.rviz"
