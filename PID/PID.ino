@@ -263,11 +263,13 @@ void loop() {
   if (now - lastDebugPrintMS >= DEBUG_PRINT_INTERVAL_MS) {
     lastDebugPrintMS = now;
 
-    Serial.print("TargetSpeed: ");
-    Serial.print(currentRampedSpeed);
-    Serial.print(", DistanceTraveled: ");
-    Serial.print(totalDistanceTraveled);
-    Serial.print(", Phase: ");
-    Serial.println(runPhase);
+    cli();
+    long currentLeftTicks = leftEncoderTicks;
+    long currentRightTicks = rightEncoderTicks;
+    sei();
+
+    Serial.print(currentLeftTicks);
+    Serial.print(", ");
+    Serial.println(currentRightTicks);
   }
 }
