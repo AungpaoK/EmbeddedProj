@@ -111,6 +111,9 @@ class ScenarioRunnerNode(Node):
         # Timer จำลองและอัปเดตสถานะที่ 20 Hz
         self.timer = self.create_timer(0.05, self._simulation_step)
 
+        # Timer รีเฟรช Map, Markers และ TF ทุก 1 วินาที เพื่อให้ RViz2 ที่เปิดทีหลังได้รับข้อมูลทันที
+        self.map_timer = self.create_timer(1.0, self._periodic_map_publish)
+
         # Thread รันสถานการณ์จำลองตาม docs/scenario.md
         self.running = True
         self.mission_thread = threading.Thread(target=self._run_mission, daemon=True)
@@ -235,6 +238,13 @@ class ScenarioRunnerNode(Node):
         make_box(4, JUNCTION_X, -TABLE2_Y - 0.5, f"🍽️ Table 2 (-{TABLE2_Y}m)", ColorRGBA(r=1.0, g=0.4, b=0.1, a=0.9))
 
         self.marker_pub.publish(markers)
+
+    def _periodic_map_publish(self):
+        """รีเฟรช Map, Static TF และ Markers เป็นระยะ เพื่อให้ RViz2 ที่เปิดทีหลังเชื่อมต่อได้ทันที"""
+        if self.map_grid:
+            self.map_pub.publish(self.map_grid)
+        self._broadcast_static_tf()
+        self._publish_scenario_markers()
 
     def _real_odom_callback(self, msg: Odometry):
         self.odom_count += 1
@@ -441,10 +451,14 @@ class ScenarioRunnerNode(Node):
         """หยุดหุ่นยนต์และตัดกำลังขับเคลื่อน"""
         self.target_v = 0.0
         self.target_w = 0.0
-        cmd = Twist()
-        for _ in range(3):
-            self.cmd_pub.publish(cmd)
-            time.sleep(0.05)
+        if rclpy.ok():
+            try:
+                cmd = Twist()
+                for _ in range(3):
+                    self.cmd_pub.publish(cmd)
+                    time.sleep(0.05)
+            except Exception:
+                pass
 
     def wait_customer_pickup(self, table_name: str, wait_sec: float = 3.0):
         """จำลองการรอลูกค้าหยิบอาหาร (IR Sensor / Manual Override)"""

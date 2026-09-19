@@ -53,7 +53,8 @@ docker run -it --rm \
   -e WAYLAND_DISPLAY="${WAYLAND_DISPLAY}" \
   -e XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR}" \
   -e ROS_DOMAIN_ID=0 \
-  -e FASTRTPS_DEFAULT_PROFILES_FILE="$PEERS_FILE" \
+  -e FASTRTPS_DEFAULT_PROFILES_FILE=/tmp/fastdds_peers.xml \
+  -v "$PEERS_FILE:/tmp/fastdds_peers.xml:ro" \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v "$HOME/.rviz2:/root/.rviz2:rw" \
   -v "${DIR}:/workspace" \
