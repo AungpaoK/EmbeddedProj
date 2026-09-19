@@ -199,7 +199,7 @@ def main() -> None:
     safety_guard = LidarSafetyGuard(
         stop_distance_m=stop_dist,
         front_cone_deg=35.0,
-        min_clearance_m=0.12,
+        min_clearance_m=0.22,
         yaw_offset_deg=yaw_offset,
     )
 

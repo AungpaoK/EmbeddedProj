@@ -42,13 +42,13 @@ class AutoExplorer(Node):
     def __init__(self):
         super().__init__("auto_explorer_node")
 
-        # พารามิเตอร์ความเร็วและระยะปลอดภัย
-        self.cruise_speed = 0.20        # m/s (ความเร็ววิ่งสำรวจ แนะนำ 0.18 - 0.25)
-        self.turn_speed = 0.55          # rad/s (~30 deg/s ป้องกัน Odometry สลิป)
-        self.front_stop_dist = 0.45     # เมตร: เริ่มหยุด/เลี้ยวเมื่อด้านหน้าใกล้กว่านี้
-        self.side_min_dist = 0.25       # เมตร: ระยะกันชนด้านข้าง
-        self.emergency_dist = 0.28      # เมตร: ถอยหลังทันทีถ้าประชิดเกินไป
-        self.chassis_clearance = 0.12   # เมตร: ตัดจุดสะท้อนตัวถังด้านใน
+        # พารามิเตอร์ความเร็วและระยะปลอดภัย (ปรับแต่งผ่าน Environment Variables ได้)
+        self.cruise_speed = float(os.environ.get("CRUISE_SPEED", "0.20"))      # m/s
+        self.turn_speed = float(os.environ.get("TURN_SPEED", "0.55"))          # rad/s
+        self.chassis_clearance = float(os.environ.get("CHASSIS_CLEARANCE", "0.22")) # เมตร: ตัดจุดสะท้อนเสา/โครงสร้างตัวถังด้านใน (เสาอยู่ที่ ~0.17m)
+        self.emergency_dist = float(os.environ.get("EMERGENCY_DIST", "0.32"))  # เมตร: ถอยหลังทันทีถ้าประชิดเกินไป (> clearance)
+        self.front_stop_dist = float(os.environ.get("FRONT_STOP_DIST", "0.45"))# เมตร: เริ่มหยุด/เลี้ยวเมื่อด้านหน้าใกล้กว่านี้
+        self.side_min_dist = float(os.environ.get("SIDE_MIN_DIST", "0.28"))    # เมตร: ระยะกันชนด้านข้าง
 
         # State Machine
         self.state = ExplorerState.CRUISE
@@ -84,7 +84,10 @@ class AutoExplorer(Node):
         self.right_dist = float("inf")
         self.widest_direction = 0.0  # มุมที่เปิดโล่งที่สุด (-pi ถึง +pi)
 
-        logger.info("Auto Explorer initialized. Ready to map autonomously.")
+        logger.info(
+            f"Auto Explorer initialized: Clearance={self.chassis_clearance:.2f}m, "
+            f"Emergency={self.emergency_dist:.2f}m, Stop={self.front_stop_dist:.2f}m, Cruise={self.cruise_speed:.2f}m/s"
+        )
 
     def _odom_callback(self, msg: Odometry):
         self.current_x = msg.pose.pose.position.x

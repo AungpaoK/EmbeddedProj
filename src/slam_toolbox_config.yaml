@@ -39,4 +39,5 @@ slam_toolbox:
 
     # Map Resolution
     resolution: 0.05
+    min_laser_range: 0.22
     max_laser_range: 12.0
