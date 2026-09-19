@@ -71,8 +71,13 @@ class SlamBridgeNode(Node):
 
         # Direction inversion settings (แก้ปัญหามอเตอร์กลับขั้ว / เดินถอยหลัง / เลี้ยวกลับด้าน)
         self._invert_linear = os.environ.get("INVERT_LINEAR", "1") == "1"
-        self._invert_angular = os.environ.get("INVERT_ANGULAR", "1") == "1"
-        logger.info(f"Drive Direction: InvertLinear={self._invert_linear}, InvertAngular={self._invert_angular}")
+        self._invert_angular = os.environ.get("INVERT_ANGULAR", "0") == "1"
+        self._invert_left_enc = os.environ.get("INVERT_LEFT_ENC", "0") == "1"
+        self._invert_right_enc = os.environ.get("INVERT_RIGHT_ENC", "1") == "1"
+        logger.info(
+            f"Drive Direction: InvertLinear={self._invert_linear}, InvertAngular={self._invert_angular}, "
+            f"InvertLeftEnc={self._invert_left_enc}, InvertRightEnc={self._invert_right_enc}"
+        )
 
         # Broadcast Static TF: base_link -> laser_frame (ทิศทางของ LiDAR)
         self._broadcast_static_laser_tf()
@@ -149,10 +154,13 @@ class SlamBridgeNode(Node):
             self._first_enc = False
             return
 
-        # สลับทิศ Odometry ให้ตรงกับการเคลื่อนที่จริงของหุ่น
-        sign = -1.0 if self._invert_linear else 1.0
-        dl = sign * (l_ticks - self._prev_l) * METERS_PER_TICK
-        dr = sign * (r_ticks - self._prev_r) * METERS_PER_TICK
+        # สลับขั้ว Encoder ซ้าย/ขวา แยกอิสระเพื่อแก้ปัญหาข้างใดข้างหนึ่งนับถอยหลัง
+        sign_l = -1.0 if self._invert_left_enc else 1.0
+        sign_r = -1.0 if self._invert_right_enc else 1.0
+        sign_lin = -1.0 if self._invert_linear else 1.0
+
+        dl = sign_lin * sign_l * (l_ticks - self._prev_l) * METERS_PER_TICK
+        dr = sign_lin * sign_r * (r_ticks - self._prev_r) * METERS_PER_TICK
         self._prev_l = l_ticks
         self._prev_r = r_ticks
 
@@ -164,6 +172,14 @@ class SlamBridgeNode(Node):
         self._x += d * math.cos(self._theta + d_theta / 2.0)
         self._y += d * math.sin(self._theta + d_theta / 2.0)
         self._theta += d_theta
+
+        # แสดง Log การขยับแบบเรียลไทม์ในเทอร์มินัลเมื่อล้อหมุน
+        if abs(dl) > 0.0005 or abs(dr) > 0.0005:
+            logger.info(
+                f"[ODOM] dL={dl*100:+.1f}cm, dR={dr*100:+.1f}cm | "
+                f"d={d*100:+.1f}cm, dTh={math.degrees(d_theta):+.1f}° | "
+                f"Pos=({self._x:.2f}, {self._y:.2f})m Yaw={math.degrees(self._theta):.1f}°"
+            )
 
     def _publish_odom_and_tf(self):
         now = self.get_clock().now().to_msg()
