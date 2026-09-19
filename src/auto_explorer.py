@@ -12,6 +12,8 @@ auto_explorer.py — Autonomous Exploration & Map-Building Node
   - ควบคุมความเร็วอย่างนุ่มนวล ป้องกันการลื่นไถลเพื่อรักษาคุณภาพ Odometry
 """
 
+import os
+import sys
 import math
 import time
 import logging
