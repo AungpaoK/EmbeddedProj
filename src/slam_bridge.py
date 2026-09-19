@@ -71,15 +71,22 @@ class SlamBridgeNode(Node):
 
         # Direction inversion settings (แก้ปัญหามอเตอร์กลับขั้ว / เดินถอยหลัง / เลี้ยวกลับด้าน)
         self._invert_linear = os.environ.get("INVERT_LINEAR", "1") == "1"
-        self._invert_angular = os.environ.get("INVERT_ANGULAR", "0") == "1"
+        self._invert_steer = os.environ.get("INVERT_STEER", "1") == "1"
+        self._invert_odom_yaw = os.environ.get("INVERT_ODOM_YAW", "0") == "1"
         self._invert_left_enc = os.environ.get("INVERT_LEFT_ENC", "0") == "1"
         self._invert_right_enc = os.environ.get("INVERT_RIGHT_ENC", "0") == "1"
+
+        # 6WD Skid-Steer Effective Wheelbase Factor (ล้อขัดพื้นขณะเลี้ยว ทำให้ต้องใช้ Track Width เสมือนจริง)
+        self._skid_factor = float(os.environ.get("SKID_FACTOR", "1.0"))
+        self._effective_wheel_base = WHEEL_BASE * self._skid_factor
+
         logger.info(
-            f"Drive Direction: InvertLinear={self._invert_linear}, InvertAngular={self._invert_angular}, "
-            f"InvertLeftEnc={self._invert_left_enc}, InvertRightEnc={self._invert_right_enc}"
+            f"Drive Config: InvertLinear={self._invert_linear}, InvertSteer={self._invert_steer}, "
+            f"InvertOdomYaw={self._invert_odom_yaw}, LeftEncInv={self._invert_left_enc}, "
+            f"RightEncInv={self._invert_right_enc}, SkidFactor={self._skid_factor} (EffW={self._effective_wheel_base:.3f}m)"
         )
 
-        # Broadcast Static TF: base_link -> laser_frame (ทิศทางของ LiDAR)
+        # Broadcast Static TF: base_link -> laser และ laser_frame (ทิศทางของ LiDAR)
         self._broadcast_static_laser_tf()
 
         # Timer สำหรับ Publish Odometry และ TF ที่ 20 Hz
@@ -95,30 +102,29 @@ class SlamBridgeNode(Node):
             logger.warning("No Arduino connected. Running with Pure Laser / Static Odom mode.")
 
     def _broadcast_static_laser_tf(self):
-        t = TransformStamped()
-        t.header.stamp = self.get_clock().now().to_msg()
-        t.header.frame_id = "base_link"
-        t.child_frame_id = "laser"
-
-        # ติดตั้งหน้ารถเยื้อง 15cm
-        t.transform.translation.x = 0.15
-        t.transform.translation.y = 0.0
-        t.transform.translation.z = 0.10
-
         half_yaw = self._yaw_offset / 2.0
-        t.transform.rotation.z = math.sin(half_yaw)
-        t.transform.rotation.w = math.cos(half_yaw)
-
-        self._static_tf_broadcaster.sendTransform(t)
+        transforms = []
+        for child in ["laser", "laser_frame"]:
+            t = TransformStamped()
+            t.header.stamp = self.get_clock().now().to_msg()
+            t.header.frame_id = "base_link"
+            t.child_frame_id = child
+            t.transform.translation.x = 0.15
+            t.transform.translation.y = 0.0
+            t.transform.translation.z = 0.10
+            t.transform.rotation.z = math.sin(half_yaw)
+            t.transform.rotation.w = math.cos(half_yaw)
+            transforms.append(t)
+        self._static_tf_broadcaster.sendTransforms(transforms)
 
     def _cmd_vel_callback(self, msg: Twist):
         """รับความเร็วจาก teleop แล้วส่ง V:left,right ให้ Arduino"""
         if not self._ser:
             return
 
-        # สลับทิศทางหากตั้งค่า Invert ไว้ (เช่น กด i แล้วถอยหลัง)
+        # สลับทิศทางหากตั้งค่า Invert ไว้ (เช่น กด i แล้วถอยหลัง / กด j แล้วเลี้ยวขวา)
         v = -msg.linear.x if self._invert_linear else msg.linear.x
-        w = -msg.angular.z if self._invert_angular else msg.angular.z
+        w = -msg.angular.z if self._invert_steer else msg.angular.z
 
         v_l = v - (w * WHEEL_BASE / 2.0)
         v_r = v + (w * WHEEL_BASE / 2.0)
@@ -154,19 +160,29 @@ class SlamBridgeNode(Node):
             self._first_enc = False
             return
 
+        delta_l_raw = l_ticks - self._prev_l
+        delta_r_raw = r_ticks - self._prev_r
+
+        # ป้องกัน Noise / Spike หลุดจาก Serial (เช่น ค่ากระโดดเกิน 2000 ticks หรือ 40cm ใน 100ms)
+        if abs(delta_l_raw) > 2000 or abs(delta_r_raw) > 2000:
+            logger.warning(f"Ignored encoder spike: dL_raw={delta_l_raw}, dR_raw={delta_r_raw}")
+            self._prev_l = l_ticks
+            self._prev_r = r_ticks
+            return
+
         # สลับขั้ว Encoder ซ้าย/ขวา แยกอิสระเพื่อแก้ปัญหาข้างใดข้างหนึ่งนับถอยหลัง
         sign_l = -1.0 if self._invert_left_enc else 1.0
         sign_r = -1.0 if self._invert_right_enc else 1.0
         sign_lin = -1.0 if self._invert_linear else 1.0
 
-        dl = sign_lin * sign_l * (l_ticks - self._prev_l) * METERS_PER_TICK
-        dr = sign_lin * sign_r * (r_ticks - self._prev_r) * METERS_PER_TICK
+        dl = sign_lin * sign_l * delta_l_raw * METERS_PER_TICK
+        dr = sign_lin * sign_r * delta_r_raw * METERS_PER_TICK
         self._prev_l = l_ticks
         self._prev_r = r_ticks
 
         d = (dl + dr) / 2.0
-        d_theta = (dr - dl) / WHEEL_BASE
-        if self._invert_angular:
+        d_theta = (dr - dl) / self._effective_wheel_base
+        if self._invert_odom_yaw:
             d_theta = -d_theta
 
         self._x += d * math.cos(self._theta + d_theta / 2.0)
@@ -211,20 +227,6 @@ class SlamBridgeNode(Node):
         t_base.transform.translation.z = 0.0
         t_base.transform.rotation.w = 1.0
         transforms.append(t_base)
-
-        # 3. TF: base_link -> laser (และ laser_frame)
-        half_yaw = self._yaw_offset / 2.0
-        for child in ["laser", "laser_frame"]:
-            t_laser = TransformStamped()
-            t_laser.header.stamp = now
-            t_laser.header.frame_id = "base_link"
-            t_laser.child_frame_id = child
-            t_laser.transform.translation.x = 0.15
-            t_laser.transform.translation.y = 0.0
-            t_laser.transform.translation.z = 0.10
-            t_laser.transform.rotation.z = math.sin(half_yaw)
-            t_laser.transform.rotation.w = math.cos(half_yaw)
-            transforms.append(t_laser)
 
         for tr in transforms:
             self._tf_broadcaster.sendTransform(tr)
