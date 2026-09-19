@@ -73,7 +73,7 @@ class SlamBridgeNode(Node):
         self._invert_linear = os.environ.get("INVERT_LINEAR", "1") == "1"
         self._invert_angular = os.environ.get("INVERT_ANGULAR", "0") == "1"
         self._invert_left_enc = os.environ.get("INVERT_LEFT_ENC", "0") == "1"
-        self._invert_right_enc = os.environ.get("INVERT_RIGHT_ENC", "1") == "1"
+        self._invert_right_enc = os.environ.get("INVERT_RIGHT_ENC", "0") == "1"
         logger.info(
             f"Drive Direction: InvertLinear={self._invert_linear}, InvertAngular={self._invert_angular}, "
             f"InvertLeftEnc={self._invert_left_enc}, InvertRightEnc={self._invert_right_enc}"
