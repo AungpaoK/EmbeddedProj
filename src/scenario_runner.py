@@ -1,0 +1,521 @@
+#!/usr/bin/env python3
+"""
+scenario_runner.py — Restaurant Delivery Scenario Runner & Simulator
+===================================================================
+รันสถานการณ์จำลองร้านอาหารตามข้อกำหนดใน docs/scenario.md:
+  - Scenario 1: Single Table Delivery (ส่งโต๊ะ 1 แล้วกลับครัว)
+  - Scenario 2: Multi-Table Delivery  (ส่งโต๊ะ 1 -> โต๊ะ 2 -> กลับครัว)
+
+ฟังก์ชันการทำงาน:
+  1. โหลดและ Publish แผนที่ร้านอาหาร (/map) จาก maps/restaurant_map.yaml
+  2. แสดง 3D Markers โต๊ะ 1, โต๊ะ 2, ครัว (Serve Station) และเส้นทางใน RViz2
+  3. รองรับ 2 โหมด:
+     - Simulation Mode (--sim)  : จำลองการวิ่งแบบฟิสิกส์ 2D พร้อมสแกน LiDAR และ TF ใน RViz
+     - Robot Mode      (--robot): สั่งงานหุ่นยนต์จริงผ่าน /cmd_vel และอ่านพิกัดจาก Odometry/SLAM
+"""
+
+import os
+import sys
+import math
+import time
+import argparse
+import threading
+from typing import List, Tuple
+
+try:
+    import rclpy
+    from rclpy.node import Node
+    from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
+    from geometry_msgs.msg import Twist, PoseStamped, TransformStamped, Point
+    from nav_msgs.msg import OccupancyGrid, MapMetaData, Odometry, Path
+    from sensor_msgs.msg import LaserScan
+    from visualization_msgs.msg import Marker, MarkerArray
+    from std_msgs.msg import ColorRGBA
+    import tf2_ros
+    from PIL import Image
+    import yaml
+    HAS_ROS2 = True
+except ImportError as e:
+    HAS_ROS2 = False
+    ROS2_IMPORT_ERROR = str(e)
+
+from config import (
+    JUNCTION_X,
+    TABLE1_Y,
+    TABLE2_Y,
+    WHEEL_BASE,
+)
+
+# พิกัดตาม docs/scenario.md
+WAYPOINTS = {
+    "kitchen":  (0.0, 0.0, 0.0),           # ครัว (Serve Station) หันหน้า 0°
+    "junction": (JUNCTION_X, 0.0, 0.0),     # ทางแยก
+    "table_1":  (JUNCTION_X, TABLE1_Y, 90.0), # โต๊ะ 1 (ซ้าย) หันหน้า +90°
+    "table_2":  (JUNCTION_X, -TABLE2_Y, -90.0),# โต๊ะ 2 (ขวา) หันหน้า -90°
+}
+
+
+class ScenarioRunnerNode(Node):
+    def __init__(self, mode: str = "sim", scenario: int = 1):
+        super().__init__("scenario_runner_node")
+        self.mode = mode
+        self.scenario_id = scenario
+
+        # สถานะตำแหน่งหุ่นยนต์ (x, y, theta_rad)
+        self.x = 0.0
+        self.y = 0.0
+        self.theta = 0.0
+        self.target_v = 0.0
+        self.target_w = 0.0
+
+        # ROS 2 Publishers & Broadcasters
+        latched_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            reliability=ReliabilityPolicy.RELIABLE,
+        )
+
+        self.map_pub = self.create_publisher(OccupancyGrid, "/map", latched_qos)
+        self.marker_pub = self.create_publisher(MarkerArray, "/scenario_markers", latched_qos)
+        self.path_pub = self.create_publisher(Path, "/robot_path", 10)
+        self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+        self.scan_pub = self.create_publisher(LaserScan, "/scan", 10)
+        self.odom_pub = self.create_publisher(Odometry, "/odom", 10)
+
+        self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
+        self.static_tf_broadcaster = tf2_ros.StaticTransformBroadcaster(self)
+
+        # สำหรับโหมด Robot: รับพิกัดจริงจาก /odom
+        if self.mode == "robot":
+            self.odom_sub = self.create_subscription(Odometry, "/odom", self._real_odom_callback, 10)
+
+        # เส้นทางสะสม (Trail)
+        self.path_msg = Path()
+        self.path_msg.header.frame_id = "map"
+
+        # โหลดและ Publish แผนที่
+        self.map_grid = self._load_occupancy_grid()
+        if self.map_grid:
+            self.map_pub.publish(self.map_grid)
+            self._broadcast_static_tf()
+            self._publish_scenario_markers()
+
+        # Timer จำลองและอัปเดตสถานะที่ 20 Hz
+        self.timer = self.create_timer(0.05, self._simulation_step)
+
+        # Thread รันสถานการณ์จำลองตาม docs/scenario.md
+        self.running = True
+        self.mission_thread = threading.Thread(target=self._run_mission, daemon=True)
+        self.mission_thread.start()
+
+    def _load_occupancy_grid(self) -> OccupancyGrid:
+        """อ่านไฟล์ PGM และ YAML เพื่อสร้าง nav_msgs/OccupancyGrid"""
+        maps_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "maps")
+        yaml_path = os.path.join(maps_dir, "restaurant_map.yaml")
+        
+        if not os.path.exists(yaml_path):
+            self.get_logger().error(f"ไม่พบไฟล์แผนที่: {yaml_path}")
+            return None
+
+        with open(yaml_path, "r") as f:
+            yaml_data = yaml.safe_load(f)
+
+        pgm_name = yaml_data["image"]
+        pgm_path = os.path.join(maps_dir, pgm_name)
+        if not os.path.exists(pgm_path):
+            self.get_logger().error(f"ไม่พบไฟล์ภาพ PGM: {pgm_path}")
+            return None
+
+        img = Image.open(pgm_path)
+        width, height = img.size
+        resolution = float(yaml_data["resolution"])
+        origin = yaml_data["origin"]
+
+        grid = OccupancyGrid()
+        grid.header.stamp = self.get_clock().now().to_msg()
+        grid.header.frame_id = "map"
+        grid.info.resolution = resolution
+        grid.info.width = width
+        grid.info.height = height
+        grid.info.origin.position.x = float(origin[0])
+        grid.info.origin.position.y = float(origin[1])
+        grid.info.origin.position.z = float(origin[2])
+        grid.info.origin.orientation.w = 1.0
+
+        data = []
+        # แปลงข้อมูลภาพ: PIL y=0 คือขอบบน แต่ ROS grid y=0 คือขอบล่าง
+        for y in reversed(range(height)):
+            for x in range(width):
+                val = img.getpixel((x, y))
+                if val == 254:
+                    data.append(0)    # Free
+                elif val == 0:
+                    data.append(100)  # Occupied (Wall/Table)
+                else:
+                    data.append(-1)   # Unknown
+        grid.data = data
+        self.get_logger().info(f"Loaded map: {width}x{height} pixels ({resolution}m/px)")
+        return grid
+
+    def _broadcast_static_tf(self):
+        """Broadcast Static TF: map -> odom และ base_link -> laser"""
+        t_map = TransformStamped()
+        t_map.header.stamp = self.get_clock().now().to_msg()
+        t_map.header.frame_id = "map"
+        t_map.child_frame_id = "odom"
+        t_map.transform.rotation.w = 1.0
+
+        t_laser = TransformStamped()
+        t_laser.header.stamp = self.get_clock().now().to_msg()
+        t_laser.header.frame_id = "base_link"
+        t_laser.child_frame_id = "laser"
+        t_laser.transform.translation.x = 0.15
+        t_laser.transform.translation.z = 0.10
+        t_laser.transform.rotation.w = 1.0
+
+        self.static_tf_broadcaster.sendTransform([t_map, t_laser])
+
+    def _publish_scenario_markers(self):
+        """สร้าง 3D Visual Markers ใน RViz2 แสดง Kitchen, Junction, Table 1, Table 2"""
+        markers = MarkerArray()
+        now = self.get_clock().now().to_msg()
+
+        def make_box(idx, x, y, name, color, sx=0.8, sy=0.6, sz=0.7):
+            m = Marker()
+            m.header.stamp = now
+            m.header.frame_id = "map"
+            m.ns = "tables"
+            m.id = idx
+            m.type = Marker.CUBE
+            m.action = Marker.ADD
+            m.pose.position.x = x
+            m.pose.position.y = y
+            m.pose.position.z = sz / 2.0
+            m.pose.orientation.w = 1.0
+            m.scale.x = sx
+            m.scale.y = sy
+            m.scale.z = sz
+            m.color = color
+            markers.markers.append(m)
+
+            # ป้ายชื่อข้อความ 3D Text
+            t = Marker()
+            t.header.stamp = now
+            t.header.frame_id = "map"
+            t.ns = "labels"
+            t.id = idx + 100
+            t.type = Marker.TEXT_VIEW_FACING
+            t.action = Marker.ADD
+            t.pose.position.x = x
+            t.pose.position.y = y
+            t.pose.position.z = sz + 0.35
+            t.scale.z = 0.25
+            t.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=1.0)
+            t.text = name
+            markers.markers.append(t)
+
+        # 1. Kitchen / Serve Station
+        make_box(1, -0.7, 0.0, "🍳 Serve Station (Kitchen)", ColorRGBA(r=0.2, g=0.8, b=0.2, a=0.85), sx=0.6, sy=1.2)
+        # 2. Junction
+        make_box(2, JUNCTION_X, 0.0, "✛ Junction", ColorRGBA(r=0.2, g=0.5, b=1.0, a=0.4), sx=0.4, sy=0.4, sz=0.02)
+        # 3. Table 1 (เหนือ / ซ้าย)
+        make_box(3, JUNCTION_X, TABLE1_Y + 0.5, f"🍽️ Table 1 (+{TABLE1_Y}m)", ColorRGBA(r=1.0, g=0.8, b=0.1, a=0.9))
+        # 4. Table 2 (ใต้ / ขวา)
+        make_box(4, JUNCTION_X, -TABLE2_Y - 0.5, f"🍽️ Table 2 (-{TABLE2_Y}m)", ColorRGBA(r=1.0, g=0.4, b=0.1, a=0.9))
+
+        self.marker_pub.publish(markers)
+
+    def _real_odom_callback(self, msg: Odometry):
+        self.x = msg.pose.pose.position.x
+        self.y = msg.pose.pose.position.y
+        q = msg.pose.pose.orientation
+        siny = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        self.theta = math.atan2(siny, cosy)
+
+    def _simulation_step(self):
+        """Simulation Loop 20 Hz: จำลองจลนศาสตร์ และบรอดคาสต์ TF / Odom"""
+        now = self.get_clock().now().to_msg()
+        dt = 0.05
+
+        if self.mode == "sim":
+            # อัปเดตพิกัดด้วยสมการ Differential Drive
+            self.x += self.target_v * math.cos(self.theta) * dt
+            self.y += self.target_v * math.sin(self.theta) * dt
+            self.theta += self.target_w * dt
+
+        half_th = self.theta / 2.0
+        qz = math.sin(half_th)
+        qw = math.cos(half_th)
+
+        # 1. TF: odom -> base_footprint -> base_link
+        t_foot = TransformStamped()
+        t_foot.header.stamp = now
+        t_foot.header.frame_id = "odom"
+        t_foot.child_frame_id = "base_footprint"
+        t_foot.transform.translation.x = self.x
+        t_foot.transform.translation.y = self.y
+        t_foot.transform.rotation.z = qz
+        t_foot.transform.rotation.w = qw
+
+        t_base = TransformStamped()
+        t_base.header.stamp = now
+        t_base.header.frame_id = "base_footprint"
+        t_base.child_frame_id = "base_link"
+        t_base.transform.rotation.w = 1.0
+
+        self.tf_broadcaster.sendTransform([t_foot, t_base])
+
+        # 2. Publish /odom
+        odom = Odometry()
+        odom.header.stamp = now
+        odom.header.frame_id = "odom"
+        odom.child_frame_id = "base_footprint"
+        odom.pose.pose.position.x = self.x
+        odom.pose.pose.position.y = self.y
+        odom.pose.pose.orientation.z = qz
+        odom.pose.pose.orientation.w = qw
+        odom.twist.twist.linear.x = self.target_v
+        odom.twist.twist.angular.z = self.target_w
+        self.odom_pub.publish(odom)
+
+        # 3. อัปเดตเส้นทาง Path Trail ใน RViz
+        if self.target_v != 0.0 or abs(self.target_w) > 0.05:
+            pose = PoseStamped()
+            pose.header.stamp = now
+            pose.header.frame_id = "map"
+            pose.pose.position.x = self.x
+            pose.pose.position.y = self.y
+            pose.pose.orientation.z = qz
+            pose.pose.orientation.w = qw
+            self.path_msg.poses.append(pose)
+            if len(self.path_msg.poses) > 500:
+                self.path_msg.poses.pop(0)
+            self.path_pub.publish(self.path_msg)
+
+        # 4. จำลองสแกน LiDAR (/scan) สะท้อนกำแพงในโหมด sim
+        if self.mode == "sim":
+            self._simulate_lidar_scan(now)
+
+    def _simulate_lidar_scan(self, now):
+        """Raycasting แบบง่ายรอบตัว 360° จำลองระยะเสมือนจริง"""
+        scan = LaserScan()
+        scan.header.stamp = now
+        scan.header.frame_id = "laser"
+        scan.angle_min = -math.pi
+        scan.angle_max = math.pi
+        num_readings = 360
+        scan.angle_increment = (2.0 * math.pi) / num_readings
+        scan.time_increment = 0.0003
+        scan.scan_time = 0.1
+        scan.range_min = 0.05
+        scan.range_max = 12.0
+
+        ranges = []
+        for i in range(num_readings):
+            ray_ang = self.theta + (scan.angle_min + i * scan.angle_increment)
+            dist = 12.0
+            # ตรวจระยะกำแพงกรอบนอกห้อง (X: -1.0 ถึง 3.4, Y: -1.8 ถึง 1.8)
+            cos_a = math.cos(ray_ang)
+            sin_a = math.sin(ray_ang)
+            
+            if cos_a > 1e-4:
+                dist = min(dist, (3.4 - self.x) / cos_a)
+            elif cos_a < -1e-4:
+                dist = min(dist, (-1.0 - self.x) / cos_a)
+            if sin_a > 1e-4:
+                dist = min(dist, (1.8 - self.y) / sin_a)
+            elif sin_a < -1e-4:
+                dist = min(dist, (-1.8 - self.y) / sin_a)
+            ranges.append(max(0.1, dist))
+
+        scan.ranges = ranges
+        self.scan_pub.publish(scan)
+
+    # ------------------------------------------------------------------
+    # การควบคุมการเคลื่อนที่ตาม Waypoints (docs/scenario.md)
+    # ------------------------------------------------------------------
+    def drive_forward(self, distance: float, speed: float = 0.22):
+        """สั่งวิ่งตรงตามระยะทางที่กำหนด"""
+        print(f"  ⬆️ [Motion] เดินหน้า {distance:.2f} เมตร...")
+        start_x, start_y = self.x, self.y
+        traveled = 0.0
+
+        while rclpy.ok() and traveled < distance:
+            self.target_v = speed
+            self.target_w = 0.0
+            if self.mode == "robot":
+                cmd = Twist()
+                cmd.linear.x = speed
+                self.cmd_pub.publish(cmd)
+            time.sleep(0.05)
+            traveled = math.hypot(self.x - start_x, self.y - start_y)
+
+        self.stop_robot()
+
+    def turn_degrees(self, degrees: float, speed: float = 0.50):
+        """สั่งหมุนรอบตัวเอง (+ = ซ้าย/CCW, - = ขวา/CW)"""
+        direction = "ซ้าย (CCW)" if degrees > 0 else "ขวา (CW)"
+        print(f"  🔄 [Motion] หมุน{direction} {abs(degrees):.1f}°...")
+        target_rad = math.radians(abs(degrees))
+        start_theta = self.theta
+        rotated = 0.0
+        w = speed if degrees > 0 else -speed
+
+        while rclpy.ok() and rotated < target_rad:
+            self.target_v = 0.0
+            self.target_w = w
+            if self.mode == "robot":
+                cmd = Twist()
+                cmd.angular.z = w
+                self.cmd_pub.publish(cmd)
+            time.sleep(0.05)
+            diff = abs(self.theta - start_theta)
+            # แก้ปัญหามุมข้าม -pi ถึง +pi
+            if diff > math.pi:
+                diff = abs(2.0 * math.pi - diff)
+            rotated = diff
+
+        self.stop_robot()
+
+    def stop_robot(self):
+        self.target_v = 0.0
+        self.target_w = 0.0
+        cmd = Twist()
+        self.cmd_pub.publish(cmd)
+        time.sleep(0.2)
+
+    def wait_customer_pickup(self, table_name: str, wait_sec: float = 3.0):
+        """จำลองการรอลูกค้าหยิบอาหาร (IR Sensor / Manual Override)"""
+        print(f"\n  🔔 [Service] ถึง {table_name} แล้ว! กะพริบไฟเบรกสีแดง รอลูกค้ารับอาหาร...")
+        for remaining in range(int(wait_sec), 0, -1):
+            print(f"     ⏳ กำลังรอลูกค้าหยิบถาดอาหาร... ({remaining}s)")
+            time.sleep(1.0)
+        print(f"  ✓ [Service] ลูกค้าหยิบอาหารเรียบร้อยแล้ว (IR Sensor Clear)\n")
+
+    # ------------------------------------------------------------------
+    # Scenario Flow Execution
+    # ------------------------------------------------------------------
+    def _run_mission(self):
+        time.sleep(1.5)  # รอ RViz2 เชื่อมต่อ
+        print("\n" + "=" * 60)
+        print(f"  🤖 FOOD DELIVERY ROBOT — SCENARIO {self.scenario_id} RUNNER")
+        print(f"  โหมดการทำงาน: {'🎮 SIMULATION (จำลอง 2D ใน RViz2)' if self.mode == 'sim' else '🚀 REAL ROBOT (สั่งหุ่นยนต์จริง)'}")
+        print("=" * 60)
+
+        if self.scenario_id == 1:
+            self._execute_scenario_1()
+        elif self.scenario_id == 2:
+            self._execute_scenario_2()
+        else:
+            print("Unknown scenario ID.")
+
+    def _execute_scenario_1(self):
+        """Scenario 1: Single Table Delivery (ส่ง Table 1 แล้วกลับครัว)"""
+        print("\n--- [Scenario 1] เริ่มต้นส่งอาหารโต๊ะ 1 ---")
+        print("1. วางอาหารชั้น 1 กำหนดส่ง Table 1 -> กดยืนยันการออกส่ง (#)")
+        time.sleep(1.0)
+
+        # 1. วิ่งตรงไป Junction (2.0m)
+        print("\n[Step 1/6] ออกจากครัว (0, 0) มุ่งหน้าสู่ Junction (2.0, 0)...")
+        self.drive_forward(JUNCTION_X)
+
+        # 2. เลี้ยวซ้าย 90° ไป Table 1
+        print("\n[Step 2/6] เลี้ยวซ้ายเข้าซอย Table 1...")
+        self.turn_degrees(+90.0)
+
+        # 3. วิ่งเข้าเทียบ Table 1 (+0.6m)
+        print("\n[Step 3/6] วิ่งเข้าเทียบจุดจอด Table 1...")
+        self.drive_forward(TABLE1_Y)
+
+        # 4. รอลูกค้าหยิบอาหาร
+        self.wait_customer_pickup("Table 1", wait_sec=3.5)
+
+        # 5. หมุน U-Turn 180° เดินทางกลับ
+        print("[Step 4/6] หมุน U-Turn 180° เพื่อเดินทางกลับครัว...")
+        self.turn_degrees(+180.0)
+
+        # 6. วิ่งกลับ Junction
+        print("[Step 5/6] วิ่งกลับมายัง Junction...")
+        self.drive_forward(TABLE1_Y)
+
+        # 7. เลี้ยวขวา 90° มุ่งหน้า Serve Station
+        print("เลี้ยวขวา 90° มุ่งหน้ากลับครัว...")
+        self.turn_degrees(-90.0)
+
+        # 8. วิ่งตรงเข้า Serve Station
+        print("[Step 6/6] วิ่งตรงเข้า Serve Station (0, 0)...")
+        self.drive_forward(JUNCTION_X)
+
+        # 9. หมุน 180° หันหน้าออกพร้อมรับงานใหม่
+        print("หมุนตัว 180° จอดเทียบท่าหันหน้าออก...")
+        self.turn_degrees(+180.0)
+
+        print("\n" + "=" * 60)
+        print("  🎉 [SCENARIO 1 COMPLETED] ส่งอาหารโต๊ะ 1 สำเร็จ จอดพร้อมรับงานรอบใหม่!")
+        print("=" * 60 + "\n")
+
+    def _execute_scenario_2(self):
+        """Scenario 2: Multi-Table Delivery (ส่ง Table 1 -> Table 2 -> กลับครัว)"""
+        print("\n--- [Scenario 2] เริ่มต้นส่งอาหาร 2 โต๊ะพร้อมกัน (Table 1 & Table 2) ---")
+        print("1. ชั้น 1: Table 1 | ชั้น 2: Table 2 -> กดยืนยัน (#)")
+        time.sleep(1.0)
+
+        # --- Deliver Table 1 ---
+        print("\n>>> ส่งโต๊ะที่ 1 (Table 1) <<<")
+        self.drive_forward(JUNCTION_X)
+        self.turn_degrees(+90.0)
+        self.drive_forward(TABLE1_Y)
+        self.wait_customer_pickup("Table 1 (ชั้น 1)", wait_sec=3.0)
+
+        # --- Deliver Table 2 ---
+        print("\n>>> เดินทางไปส่งโต๊ะที่ 2 (Table 2) <<<")
+        self.turn_degrees(+180.0)
+        self.drive_forward(TABLE1_Y)     # กลับมาที่ Junction
+        # วิ่งตรงข้ามแยกไปยัง Table 2 (ระยะทางเท่ากับ TABLE2_Y)
+        print("วิ่งตรงข้าม Junction เข้าสู่ Table 2...")
+        self.drive_forward(TABLE2_Y)
+        self.wait_customer_pickup("Table 2 (ชั้น 2)", wait_sec=3.0)
+
+        # --- Return to Kitchen ---
+        print("\n>>> ส่งครบทั้ง 2 โต๊ะแล้ว เดินทางกลับครัว <<<")
+        self.turn_degrees(+180.0)
+        self.drive_forward(TABLE2_Y)     # กลับมาที่ Junction
+        print("เลี้ยวซ้าย 90° เข้าหาครัว...")
+        self.turn_degrees(+90.0)
+        self.drive_forward(JUNCTION_X)   # วิ่งกลับเข้าครัว (0, 0)
+        print("หมุนตัว 180° จอดเทียบท่าหันหน้าออก...")
+        self.turn_degrees(+180.0)
+
+        print("\n" + "=" * 60)
+        print("  🎉 [SCENARIO 2 COMPLETED] เสิร์ฟครบ 2 โต๊ะ และเดินทางกลับครัวเรียบร้อย!")
+        print("=" * 60 + "\n")
+
+
+def main():
+    if not HAS_ROS2:
+        print(f"ERROR: ROS 2 is not available: {ROS2_IMPORT_ERROR}")
+        sys.exit(1)
+
+    parser = argparse.ArgumentParser(description="Restaurant Delivery Scenario Runner & Simulator")
+    parser.add_argument("--sim", action="store_true", default=True, help="Run in pure simulation mode (default)")
+    parser.add_argument("--robot", action="store_true", help="Run on real physical robot via /cmd_vel")
+    parser.add_argument("--scenario", type=int, default=1, choices=[1, 2], help="Scenario number: 1 or 2 (default: 1)")
+    args = parser.parse_args()
+
+    mode = "robot" if args.robot else "sim"
+
+    rclpy.init()
+    node = ScenarioRunnerNode(mode=mode, scenario=args.scenario)
+
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.stop_robot()
+    finally:
+        node.running = False
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

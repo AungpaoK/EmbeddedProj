@@ -5,7 +5,12 @@
 set -e
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RVIZ_CONFIG="${DIR}/src/slam_view.rviz"
+RVIZ_CONFIG="${1:-${DIR}/src/slam_view.rviz}"
+if [[ "$RVIZ_CONFIG" != /* ]]; then
+    RVIZ_CONFIG="/workspace/${RVIZ_CONFIG}"
+elif [[ "$RVIZ_CONFIG" == "${DIR}"* ]]; then
+    RVIZ_CONFIG="/workspace/${RVIZ_CONFIG#"${DIR}/"}"
+fi
 PI_IP="${PI_IP:-172.30.81.226}"
 PEERS_FILE="$HOME/.fastdds_peers.xml"
 
@@ -53,4 +58,4 @@ docker run -it --rm \
   -v "$HOME/.rviz2:/root/.rviz2:rw" \
   -v "${DIR}:/workspace" \
   osrf/ros:jazzy-desktop \
-  bash -c "source /opt/ros/jazzy/setup.bash && rviz2 -d /workspace/src/slam_view.rviz"
+  bash -c "source /opt/ros/jazzy/setup.bash && rviz2 -d ${RVIZ_CONFIG}"
