@@ -164,23 +164,53 @@ class SlamBridgeNode(Node):
         qz = math.sin(half_theta)
         qw = math.cos(half_theta)
 
-        # 1. Publish TF: odom -> base_link
-        t = TransformStamped()
-        t.header.stamp = now
-        t.header.frame_id = "odom"
-        t.child_frame_id = "base_link"
-        t.transform.translation.x = self._x
-        t.transform.translation.y = self._y
-        t.transform.translation.z = 0.0
-        t.transform.rotation.z = qz
-        t.transform.rotation.w = qw
-        self._tf_broadcaster.sendTransform(t)
+        transforms = []
 
-        # 2. Publish /odom Topic
+        # 1. TF: odom -> base_footprint (สำหรับ slam_toolbox ที่ใช้ base_footprint)
+        t_footprint = TransformStamped()
+        t_footprint.header.stamp = now
+        t_footprint.header.frame_id = "odom"
+        t_footprint.child_frame_id = "base_footprint"
+        t_footprint.transform.translation.x = self._x
+        t_footprint.transform.translation.y = self._y
+        t_footprint.transform.translation.z = 0.0
+        t_footprint.transform.rotation.z = qz
+        t_footprint.transform.rotation.w = qw
+        transforms.append(t_footprint)
+
+        # 2. TF: base_footprint -> base_link
+        t_base = TransformStamped()
+        t_base.header.stamp = now
+        t_base.header.frame_id = "base_footprint"
+        t_base.child_frame_id = "base_link"
+        t_base.transform.translation.x = 0.0
+        t_base.transform.translation.y = 0.0
+        t_base.transform.translation.z = 0.0
+        t_base.transform.rotation.w = 1.0
+        transforms.append(t_base)
+
+        # 3. TF: base_link -> laser (และ laser_frame)
+        half_yaw = self._yaw_offset / 2.0
+        for child in ["laser", "laser_frame"]:
+            t_laser = TransformStamped()
+            t_laser.header.stamp = now
+            t_laser.header.frame_id = "base_link"
+            t_laser.child_frame_id = child
+            t_laser.transform.translation.x = 0.15
+            t_laser.transform.translation.y = 0.0
+            t_laser.transform.translation.z = 0.10
+            t_laser.transform.rotation.z = math.sin(half_yaw)
+            t_laser.transform.rotation.w = math.cos(half_yaw)
+            transforms.append(t_laser)
+
+        for tr in transforms:
+            self._tf_broadcaster.sendTransform(tr)
+
+        # 4. Publish /odom Topic
         odom = OdomMsg()
         odom.header.stamp = now
         odom.header.frame_id = "odom"
-        odom.child_frame_id = "base_link"
+        odom.child_frame_id = "base_footprint"
         odom.pose.pose.position.x = self._x
         odom.pose.pose.position.y = self._y
         odom.pose.pose.orientation.z = qz
