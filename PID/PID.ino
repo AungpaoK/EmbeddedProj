@@ -4,15 +4,15 @@
 #define ENA 10   // Left Motor Speed PWM
 #define ENB 11   // Right Motor Speed PWM
 #define IN3 12   // Right Motor Direction 2
-#define IN4 7   // Right Motor Direction 1
+#define IN4 7    // Right Motor Direction 1
 
 // --- Right Motor Encoder Pins (Port C) ---
 #define RIGHT_ENC_A A1  // PC1 (PCINT9) - Phase A
 #define RIGHT_ENC_B A0  // PC0 (PCINT8) - Phase B
 
 // --- Left Motor Encoder Pins (Port C) ---
-#define LEFT_ENC_A A5  // PC5 (PCINT13) - Phase A
-#define LEFT_ENC_B A4  // PC4 (PCINT12) - Phase B
+#define LEFT_ENC_A A3  // PC5 (PCINT13) - Phase A
+#define LEFT_ENC_B A2  // PC4 (PCINT12) - Phase B
 
 volatile long leftEncoderTicks = 0;
 volatile long rightEncoderTicks = 0;
@@ -71,8 +71,8 @@ ISR(PCINT1_vect) {
   uint8_t currentPortC = PINC; // Read Port C input register
 
   // Left encoder: Phase A = A5/PC5, Phase B = A4/PC4.
-  if ((currentPortC & (1 << PC5)) && !(lastPortC & (1 << PC5))) {
-    if (currentPortC & (1 << PC4))
+  if ((currentPortC & (1 << PC3)) && !(lastPortC & (1 << PC3))) {
+    if (currentPortC & (1 << PC2))
       leftEncoderTicks++;  // Forward
     else
       leftEncoderTicks--;  // Reverse
@@ -89,12 +89,12 @@ ISR(PCINT1_vect) {
 }
 
 void setupEncoders() {
-  // Encoder pins A0, A1, A4 and A5 are inputs with pull-ups.
-  DDRC &= ~0b00110011;
-  PORTC |= (1 << PC0) | (1 << PC1) | (1 << PC4) | (1 << PC5);
+  // Encoder pins A0, A1, A2 and A3 are inputs with pull-ups.
+  DDRC &= ~0b00111100;
+  PORTC |= (1 << PC0) | (1 << PC1) | (1 << PC2) | (1 << PC3);
   PCICR |= (1 << PCIE1);
-  // Interrupt on Phase A: right A1/PCINT9 and left A5/PCINT13.
-  PCMSK1 |= (1 << PCINT9) | (1 << PCINT13);
+  // Interrupt on Phase A: right A1/PCINT9 and left A3/PCINT11.
+  PCMSK1 |= (1 << PCINT9) | (1 << PCINT11);
 }
 
 void driveMotors(int leftPWM, int rightPWM) {
@@ -150,10 +150,8 @@ void loop() {
     // 2. Exponential Moving Average. The result remains a speed measured in
     // ticks per control interval instead of accumulating into total ticks.
     constexpr float SPEED_FILTER_ALPHA = 0.15;
-    actualLeftSpeed += SPEED_FILTER_ALPHA *
-                       (rawActualLeftSpeed - actualLeftSpeed);
-    actualRightSpeed += SPEED_FILTER_ALPHA *
-                        (rawActualRightSpeed - actualRightSpeed);
+    actualLeftSpeed += SPEED_FILTER_ALPHA * (rawActualLeftSpeed - actualLeftSpeed);
+    actualRightSpeed += SPEED_FILTER_ALPHA * (rawActualRightSpeed - actualRightSpeed);
 
     // --- State Machine ---
     switch (runPhase) {
@@ -199,8 +197,7 @@ void loop() {
     }
 
     // 3. PID Speed Control Calculation
-    targetSpeedTicks =
-        (currentRampedPWM / MAX_TARGET_PWM) * MAX_ACTUAL_SPEED_TICKS;
+    targetSpeedTicks = (currentRampedPWM / MAX_TARGET_PWM) * MAX_ACTUAL_SPEED_TICKS;
     float speedLeftError = targetSpeedTicks - actualLeftSpeed;
     float speedRightError = targetSpeedTicks - actualRightSpeed;
 
