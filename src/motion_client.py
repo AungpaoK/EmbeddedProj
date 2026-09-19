@@ -17,7 +17,10 @@ Serial Protocol (Arduino #1):
     ENCODER:<L>,<R>\\n         — Encoder Ticks (สำหรับ Odometry, อ่านโดย odometry.py)
 """
 
-import serial
+try:
+    import serial
+except ImportError:
+    serial = None
 import time
 import logging
 

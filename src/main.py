@@ -23,7 +23,10 @@ import sys
 import math
 import signal
 import threading
-import serial
+try:
+    import serial
+except ImportError:
+    serial = None
 
 # Local imports
 from config import (
@@ -34,7 +37,7 @@ from config import (
 )
 from odometry import Odometry
 from motion_client import MotionClient
-from shelf_client import ShelfClient
+from shelf_client import ShelfClient, VirtualShelfClient
 from delivery_fsm import DeliveryFSM
 from lidar_safety import LidarSafetyGuard
 from waypoint_controller import WaypointController
@@ -64,14 +67,38 @@ def _setup_logging() -> None:
 
 
 # ===========================================================
-# Serial Connection Helper
+# Serial Connection Helper & Auto-detection
 # ===========================================================
-def _open_serial(port: str, baud: int, timeout: float, label: str) -> serial.Serial:
+def _find_motion_port(preferred: str) -> str:
+    """ค้นหาพอร์ต Arduino #1 อัตโนมัติ หาก preferred port ไม่มีอยู่จริง"""
+    if os.path.exists(preferred):
+        return preferred
+    # ลองสแกนพอร์ตมาตรฐานอื่นๆ (ข้าม ttyUSB0 ซึ่งเป็น LiDAR)
+    for candidate in ["/dev/ttyUSB1", "/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyUSB2"]:
+        if os.path.exists(candidate):
+            logging.getLogger(__name__).info(f"[Motion] Auto-detected port: {candidate}")
+            return candidate
+    return preferred
+
+
+def _open_serial(port: str, baud: int, timeout: float, label: str, optional: bool = False):
+    if not port or port.lower() in ("none", "null", "false", "mock", ""):
+        logging.getLogger(__name__).info(f"[{label}] Port disabled ('{port}').")
+        return None
+    if serial is None:
+        if optional:
+            logging.getLogger(__name__).warning(f"[{label}] pyserial is not installed. Running in Optional/Virtual mode.")
+            return None
+        logging.getLogger(__name__).critical(f"[{label}] pyserial is not installed! Run: sudo apt install python3-serial")
+        sys.exit(1)
     try:
         ser = serial.Serial(port, baud, timeout=timeout)
         logging.getLogger(__name__).info(f"[{label}] Connected: {port} @ {baud} baud")
         return ser
-    except serial.SerialException as e:
+    except (serial.SerialException, FileNotFoundError, OSError) as e:
+        if optional:
+            logging.getLogger(__name__).warning(f"[{label}] Port {port} not available: {e}. (Running in Optional/Virtual mode)")
+            return None
         logging.getLogger(__name__).critical(f"[{label}] Cannot open {port}: {e}")
         sys.exit(1)
 
@@ -136,8 +163,9 @@ def main() -> None:
     _setup_logging()
     logger = logging.getLogger(__name__)
 
-    # --- Read port overrides from env ---
+    # --- Read port overrides from env & Auto-detect ---
     motion_port = os.environ.get("MOTION_PORT", MOTION_SERIAL_PORT)
+    motion_port = _find_motion_port(motion_port)
     shelf_port  = os.environ.get("SHELF_PORT",  SHELF_SERIAL_PORT)
     baud        = int(os.environ.get("BAUD_RATE", SERIAL_BAUD))
     yaw_offset  = float(os.environ.get("LIDAR_YAW_OFFSET", "0.0"))
@@ -147,19 +175,25 @@ def main() -> None:
     logger.info("  Food Delivery Robot — Unified ROS 2 Hybrid")
     logger.info("=" * 55)
     logger.info(f"  Motion Arduino   : {motion_port}")
-    logger.info(f"  Shelf Arduino    : {shelf_port}")
+    logger.info(f"  Shelf Arduino    : {shelf_port} (Optional)")
     logger.info(f"  LiDAR Yaw Offset : {yaw_offset}°")
     logger.info(f"  LiDAR Stop Dist  : {stop_dist} m")
     logger.info(f"  ROS 2 Status     : {'Available' if HAS_ROS2 else 'Standalone / No ROS 2'}")
 
     # --- Open Serial Connections ---
     motion_ser = _open_serial(motion_port, baud, SERIAL_TIMEOUT, "Motion")
-    shelf_ser  = _open_serial(shelf_port,  baud, SERIAL_TIMEOUT, "Shelf")
+    shelf_ser  = _open_serial(shelf_port,  baud, SERIAL_TIMEOUT, "Shelf", optional=True)
 
     # --- Instantiate Subsystems ---
     odometry = Odometry(motion_ser)
     motion   = MotionClient(motion_ser)
-    shelf    = ShelfClient(shelf_ser)
+
+    # Shelf Subsystem (Hardware or Virtual Fallback)
+    if shelf_ser is not None:
+        shelf = ShelfClient(shelf_ser)
+    else:
+        logger.info("[main] Arduino #2 (Shelf) not connected. Running with VirtualShelfClient.")
+        shelf = VirtualShelfClient(auto_dispatch=True, default_shelf=1, default_table=1)
 
     # --- LiDAR Safety Guard ---
     safety_guard = LidarSafetyGuard(
@@ -220,8 +254,10 @@ def main() -> None:
         shelf.stop()
         if HAS_ROS2 and rclpy.ok():
             rclpy.shutdown()
-        motion_ser.close()
-        shelf_ser.close()
+        if motion_ser is not None:
+            motion_ser.close()
+        if shelf_ser is not None:
+            shelf_ser.close()
         logger.info("[main] Shutdown complete.")
 
 

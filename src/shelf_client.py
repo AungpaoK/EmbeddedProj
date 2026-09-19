@@ -15,7 +15,10 @@ Serial Protocol (Arduino #2):
     LCD:<row>,<text>\\n        — แสดงข้อความบน LCD row 0 หรือ 1
 """
 
-import serial
+try:
+    import serial
+except ImportError:
+    serial = None
 import threading
 import time
 import logging
@@ -195,3 +198,96 @@ class ShelfClient:
             elif raw == "OVERRIDE":
                 self._override_flag = True
                 logger.warning("[Shelf] OVERRIDE button pressed!")
+
+
+class VirtualShelfClient:
+    """
+    Virtual / Mock Shelf & UI Client
+    ใช้เมื่อ Arduino #2 ยังไม่พร้อม เพื่อให้สามารถทดสอบระบบ LiDAR, SLAM และการเคลื่อนที่ได้ทันที
+    """
+
+    def __init__(
+        self,
+        auto_dispatch: bool = True,
+        default_shelf: int = 1,
+        default_table: int = 1,
+    ) -> None:
+        self.auto_dispatch = auto_dispatch
+        self.default_shelf = default_shelf
+        self.default_table = default_table
+
+        self._food_on_shelf: dict[int, bool] = {1: False, 2: False}
+        self._key_queue: deque[str] = deque()
+        self._override_flag = False
+
+    def start(self) -> None:
+        logger.info("[VirtualShelf] Virtual Shelf Client started (Mock Hardware UI).")
+        print("\n" + "-" * 55)
+        print("  💡 Virtual Shelf Mode (Arduino #2 is Optional)")
+        print(f"     Auto-Dispatch: Shelf {self.default_shelf} → Table {self.default_table}")
+        print("-" * 55)
+
+    def stop(self) -> None:
+        logger.info("[VirtualShelf] Virtual Shelf Client stopped.")
+
+    def lcd_print(self, row: int, text: str) -> None:
+        print(f"  📺 [LCD Row {row}] {text}")
+
+    def ir_has_food(self, shelf: int) -> bool:
+        return self._food_on_shelf.get(shelf, False)
+
+    def wait_for_food_on(self, shelf: int, timeout: float | None = None) -> bool:
+        time.sleep(0.8)
+        self._food_on_shelf[shelf] = True
+        print(f"  🍽️ [Virtual Sensor] ตรวจพบอาหารวางบนชั้น {shelf} (IR = DETECTED)")
+        return True
+
+    def wait_for_food_removed(self, shelf: int, timeout: float | None = None) -> bool:
+        print(f"  🍽️ [Virtual Sensor] รอส่งมอบอาหารที่ชั้น {shelf}... (จำลองลูกค้ารับอาหารใน 3 วินาที)")
+        time.sleep(3.0)
+        self._food_on_shelf[shelf] = False
+        print(f"  ✅ [Virtual Sensor] ลูกค้าหยิบอาหารชั้น {shelf} ออกแล้ว (IR = CLEARED)")
+        return True
+
+    def poll_key(self) -> str | None:
+        if self._key_queue:
+            return self._key_queue.popleft()
+        return None
+
+    def wait_for_key(
+        self,
+        valid_keys: list[str] | None = None,
+        timeout: float | None = None,
+    ) -> str | None:
+        if self._key_queue:
+            k = self._key_queue.popleft()
+            if valid_keys is None or k in valid_keys:
+                return k
+
+        if self.auto_dispatch and valid_keys:
+            time.sleep(0.6)
+            # ลำดับจำลองปุ่มของ FSM:
+            if str(self.default_shelf) in valid_keys:
+                key = str(self.default_shelf)
+            elif "B" in valid_keys:
+                key = "B"
+            elif str(self.default_table) in valid_keys:
+                key = str(self.default_table)
+            elif "C" in valid_keys:
+                key = "C"
+            elif "#" in valid_keys:
+                key = "#"
+            else:
+                key = valid_keys[0]
+
+            print(f"  ⌨️ [Virtual Keypad] จำลองการกดปุ่ม: '{key}'")
+            return key
+
+        return None
+
+    def consume_override(self) -> bool:
+        if self._override_flag:
+            self._override_flag = False
+            return True
+        return False
+

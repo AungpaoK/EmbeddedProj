@@ -11,7 +11,10 @@ Protocol รับ: "ENCODER:<left_ticks>,<right_ticks>\\n"
 import math
 import threading
 import time
-import serial
+try:
+    import serial
+except ImportError:
+    serial = None
 import logging
 
 from config import (

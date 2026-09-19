@@ -17,9 +17,10 @@ METERS_PER_TICK: float = (2.0 * 3.14159265 * WHEEL_RADIUS) / TICKS_PER_REV
 
 # ===========================================================
 # Serial Ports (ปรับตาม /dev/tty* จริง)
+# หมายเหตุ: /dev/ttyUSB0 ถูกใช้งานโดย RPLiDAR แล้ว
 # ===========================================================
-MOTION_SERIAL_PORT: str = "/dev/ttyUSB0"   # Arduino #1 (Motion Controller)
-SHELF_SERIAL_PORT: str = "/dev/ttyUSB1"    # Arduino #2 (Shelf & UI Controller)
+MOTION_SERIAL_PORT: str = "/dev/ttyUSB1"   # Arduino #1 (Motion) — หรือ /dev/ttyACM0
+SHELF_SERIAL_PORT: str = "none"            # Arduino #2 (Shelf) — ตั้งเป็น "none" เมื่อยังไม่ได้ต่อ (ใช้ VirtualShelf แทน)
 SERIAL_BAUD: int = 115200
 SERIAL_TIMEOUT: float = 1.0
 
