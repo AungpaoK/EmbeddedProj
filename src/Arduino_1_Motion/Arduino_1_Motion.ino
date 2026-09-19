@@ -117,29 +117,41 @@ unsigned long lastEncoderPrint = 0;
 
 // ============================================================
 // Encoder ISR (PCINT1 — Port C)
+// ผูกตามขา Pin ที่กำหนดไว้ใน robotconfig.h เป็นหลัก
 // ============================================================
+#define PORTC_BIT(pin)   ((pin) - A0)
+#define PCINT_BIT(pin)   (PCINT8 + ((pin) - A0))
+
+const uint8_t LEFT_A_BIT  = PORTC_BIT(LEFT_ENC_A);
+const uint8_t LEFT_B_BIT  = PORTC_BIT(LEFT_ENC_B);
+const uint8_t RIGHT_A_BIT = PORTC_BIT(RIGHT_ENC_A);
+const uint8_t RIGHT_B_BIT = PORTC_BIT(RIGHT_ENC_B);
+
 ISR(PCINT1_vect) {
     static uint8_t lastPortC = 0;
     uint8_t cur = PINC;
 
-    // Left: Phase A = PC3 (A3), Phase B = PC2 (A2)
-    if ((cur & (1 << PC3)) && !(lastPortC & (1 << PC3))) {
-        if (cur & (1 << PC2)) leftEncoderTicks--;
-        else                   leftEncoderTicks++;
+    // Left Encoder: Phase A rising edge
+    if ((cur & (1 << LEFT_A_BIT)) && !(lastPortC & (1 << LEFT_A_BIT))) {
+        if (cur & (1 << LEFT_B_BIT)) leftEncoderTicks--;
+        else                         leftEncoderTicks++;
     }
-    // Right: Phase A = PC0 (A0), Phase B = PC1 (A1)
-    if ((cur & (1 << PC0)) && !(lastPortC & (1 << PC0))) {
-        if (cur & (1 << PC1)) rightEncoderTicks--;
-        else                   rightEncoderTicks++;
+    // Right Encoder: Phase A rising edge
+    if ((cur & (1 << RIGHT_A_BIT)) && !(lastPortC & (1 << RIGHT_A_BIT))) {
+        if (cur & (1 << RIGHT_B_BIT)) rightEncoderTicks--;
+        else                          rightEncoderTicks++;
     }
     lastPortC = cur;
 }
 
 void setupEncoders() {
-    DDRC  &= ~((1 << PC0) | (1 << PC1) | (1 << PC2) | (1 << PC3));
-    PORTC |= (1 << PC0) | (1 << PC1) | (1 << PC2) | (1 << PC3);
-    PCICR |= (1 << PCIE1);
-    PCMSK1 |= (1 << PCINT8) | (1 << PCINT11);
+    pinMode(LEFT_ENC_A, INPUT_PULLUP);
+    pinMode(LEFT_ENC_B, INPUT_PULLUP);
+    pinMode(RIGHT_ENC_A, INPUT_PULLUP);
+    pinMode(RIGHT_ENC_B, INPUT_PULLUP);
+
+    PCICR  |= (1 << PCIE1);  // เปิดใช้งาน Pin Change Interrupt บน Port C
+    PCMSK1 |= (1 << PCINT_BIT(LEFT_ENC_A)) | (1 << PCINT_BIT(RIGHT_ENC_A));
 }
 
 // ============================================================
@@ -318,7 +330,15 @@ void executeVelocity(float dt) {
 // ============================================================
 void setup() {
     Serial.begin(115200);
-    DDRB |= 0b00111111;
+
+    // กำหนด Pin ควบคุมมอเตอร์ L298 ตาม robotconfig.h
+    pinMode(IN1, OUTPUT);
+    pinMode(IN2, OUTPUT);
+    pinMode(IN3, OUTPUT);
+    pinMode(IN4, OUTPUT);
+    pinMode(ENA, OUTPUT);
+    pinMode(ENB, OUTPUT);
+
     setupEncoders();
 
     pidLeft.Kp  = 150.0; pidLeft.Ki  = 10.0; pidLeft.Kd  = 1.2;
