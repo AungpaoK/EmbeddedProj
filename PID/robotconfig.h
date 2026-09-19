@@ -1,4 +1,3 @@
-// MOVE THIS FILE INTO YOUR LIB FOR EASY USE
 // L298 pins
 
 #define IN4 7
@@ -15,8 +14,8 @@
 
 // Left Encoder Pins
 
-#define LEFT_ENC_A A5
-#define LEFT_ENC_B A4
+#define LEFT_ENC_A A3
+#define LEFT_ENC_B A2
 
 // Wheel size
 
