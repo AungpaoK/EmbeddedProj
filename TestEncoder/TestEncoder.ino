@@ -11,24 +11,20 @@ ISR(PCINT1_vect) {
   static uint8_t lastPortC = 0;
   uint8_t currentPortC = PINC; // Read Port C input register
 
-  // Detect rising edge on Phase A (A4 / PC4)
-  if ((currentPortC & (1 << PC4)) && !(lastPortC & (1 << PC4))) {
-    // Check Phase B to determine rotation direction
-    if (currentPortC & (1 << PC5)) {
-      leftEncoderTicks--;  // Forward
-    } else {
-      leftEncoderTicks++;  // Reverse
-    }
+  // Left encoder: Phase A = A5/PC5, Phase B = A4/PC4.
+  if ((currentPortC & (1 << PC5)) && !(lastPortC & (1 << PC5))) {
+    if (currentPortC & (1 << PC4))
+      leftEncoderTicks++;
+    else
+      leftEncoderTicks--;
   }
 
-  // Detect rising edge on Phase A (A4 / PC4)
-  if ((currentPortC & (1 << PC0)) && !(lastPortC & (1 << PC0))) {
-    // Check Phase B to determine rotation direction
-    if (currentPortC & (1 << PC1)) {
-      rightEncoderTicks++;  // Forward
-    } else {
-      rightEncoderTicks--;  // Reverse
-    }
+  // Right encoder: Phase A = A1/PC1, Phase B = A0/PC0.
+  if ((currentPortC & (1 << PC1)) && !(lastPortC & (1 << PC1))) {
+    if (currentPortC & (1 << PC0))
+      rightEncoderTicks--;
+    else
+      rightEncoderTicks++;
   }
   lastPortC = currentPortC;
 }

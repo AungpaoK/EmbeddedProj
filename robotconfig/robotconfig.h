@@ -24,4 +24,4 @@
 #define WHEEL_BASE 0.343   // 34.3 cm
 
 // Motor Variable
-#define TICKS_PER_REV 1080.0
+#define TICKS_PER_REV 1920.0

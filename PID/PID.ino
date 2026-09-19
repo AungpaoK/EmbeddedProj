@@ -1,478 +1,269 @@
-#include "Arduino.h"
-#include "robotconfig.h" // for robot & wheel config
-#include <MD_MAX72xx.h>
+// --- L298N Motor Pins ---
+#define IN1 8    // Left Motor Direction 2
+#define IN2 9    // Left Motor Direction 1
+#define ENA 10   // Left Motor Speed PWM
+#define ENB 11   // Right Motor Speed PWM
+#define IN3 12   // Right Motor Direction 2
+#define IN4 7    // Right Motor Direction 1
 
-// --- MAX7219 Turn Indicator Pins (Software SPI - using free pins) ---
-constexpr uint8_t MAX7219_DIN_PIN = 4;
-constexpr uint8_t MAX7219_CLK_PIN = 5;
-constexpr uint8_t MAX7219_CS_PIN = 6;
-constexpr uint8_t MAX7219_COUNT = 4;
-constexpr uint8_t MAX7219_BRIGHTNESS = 2;
+// --- Right Motor Encoder Pins (Port C) ---
+#define RIGHT_ENC_A A1  // PC1 (PCINT9) - Phase A
+#define RIGHT_ENC_B A0  // PC0 (PCINT8) - Phase B
 
-enum TurnSignal { TURN_OFF, TURN_LEFT, TURN_RIGHT };
-
-MD_MAX72XX matrix(MD_MAX72XX::FC16_HW, MAX7219_DIN_PIN, MAX7219_CLK_PIN,
-                  MAX7219_CS_PIN, MAX7219_COUNT);
-
-TurnSignal currentSignal = TURN_OFF;
-uint8_t animationStep = 0;
-unsigned long lastAnimationTime = 0;
-unsigned long nextAnimationDelay = 130;
-
-const uint8_t arrowRight[8] = {0b00011000, 0b00001100, 0b00000110, 0b11111111,
-                               0b11111111, 0b00000110, 0b00001100, 0b00011000};
-
-const uint8_t arrowLeft[8] = {0b00011000, 0b00110000, 0b01100000, 0b11111111,
-                              0b11111111, 0b01100000, 0b00110000, 0b00011000};
-
-void drawArrow(uint8_t module, const uint8_t picture[]) {
-  uint8_t firstColumn = module * 8;
-  for (uint8_t row = 0; row < 8; row++) {
-    for (uint8_t column = 0; column < 8; column++) {
-      bool ledOn = bitRead(picture[row], 7 - column);
-      matrix.setPoint(row, firstColumn + column, ledOn);
-    }
-  }
-}
-
-void turnIndicatorBegin() {
-  matrix.begin();
-  matrix.control(MD_MAX72XX::INTENSITY, MAX7219_BRIGHTNESS);
-  matrix.control(MD_MAX72XX::UPDATE, MD_MAX72XX::OFF);
-  matrix.clear();
-  matrix.update();
-}
-
-void turnIndicatorSet(TurnSignal signal) {
-  if (currentSignal == signal) {
-    return;
-  }
-  currentSignal = signal;
-  animationStep = 0;
-  nextAnimationDelay = 0;
-  lastAnimationTime = millis();
-  matrix.clear();
-  matrix.update();
-}
-
-void turnIndicatorUpdate() {
-  if (currentSignal == TURN_OFF) {
-    return;
-  }
-
-  unsigned long now = millis();
-  if (now - lastAnimationTime < nextAnimationDelay) {
-    return;
-  }
-
-  lastAnimationTime = now;
-
-  if (animationStep < MAX7219_COUNT) {
-    if (currentSignal == TURN_RIGHT) {
-      drawArrow(animationStep, arrowRight);
-    } else {
-      drawArrow(MAX7219_COUNT - 1 - animationStep, arrowLeft);
-    }
-    animationStep++;
-    nextAnimationDelay = 130;
-  } else {
-    matrix.clear();
-    animationStep = 0;
-    nextAnimationDelay = 300;
-  }
-
-  matrix.update();
-}
-
-// --- Encoder Sign Convention ---
-const bool LEFT_ENC_INVERT = false;
-const bool RIGHT_ENC_INVERT = true; // Right motor mounted mirrored
+// --- Left Motor Encoder Pins (Port C) ---
+#define LEFT_ENC_A A3  // PC5 (PCINT13) - Phase A
+#define LEFT_ENC_B A2  // PC4 (PCINT12) - Phase B
 
 volatile long leftEncoderTicks = 0;
 volatile long rightEncoderTicks = 0;
 
-// --- Physical Robot Parameters ---
-const float METERS_PER_PULSE =
-    (2.0 * 3.14159265 * WHEEL_RADIUS) / TICKS_PER_REV;
-
-// --- Target Formula: N = (W / 2) * D * (TPR / (2 * PI * R)) ---
-const float TARGET_TURN_TICKS =
-    (WHEEL_BASE / 2.0) * PI *
-    (TICKS_PER_REV / (2.0 * 3.14159265 * WHEEL_RADIUS));
-
 // --- Timing Control ---
-const unsigned long CONTROL_INTERVAL_MS = 20; // 50 Hz Control Loop
+const unsigned long CONTROL_INTERVAL_MS = 20;     // 50 Hz Control Loop
 const unsigned long DEBUG_PRINT_INTERVAL_MS = 100;
+const unsigned long HOLD_DURATION_MS = 25000;     // Hold speed
+const unsigned long PAUSE_DURATION_MS = 1000;     // Pause between cycles
 
 unsigned long lastControlTime = 0;
 unsigned long lastDebugPrintMS = 0;
-unsigned long stepStartTime = 0;
+unsigned long runStartTime = 0;
 
-// Baseline tracking variables
-long startLeftTicks = 0;
-long startRightTicks = 0;
+// --- Speed & Acceleration Settings ---
+float currentRampedPWM = 0.0;
+// Leave PWM headroom so the controller can balance both wheels without
+// driving either motor continuously at saturation.
+const float MAX_TARGET_PWM = 240.0;
+const float MAX_ACTUAL_SPEED_TICKS = 28.0;
+const float ACCEL_STEP = 3.0;        // Acceleration increment
+const float DECEL_STEP = 3.0;        // Deceleration decrement
 
-// --- Speed & Motion Settings ---
-float currentRampedSpeedMPS = 0.0;
-const float CRUISE_SPEED_MPS = 0.25;
-const float TURN_SPEED_MPS = 0.10; // Reduced from 0.15 to limit turn momentum
-const float ACCEL_STEP_MPS = 0.005;
-const float DECEL_DIST_METERS = 0.40; // Extended from 0.35 for gentler brake
-const float TURN_DECEL_FRAC = 0.30;   // Decelerate in last 30% of turn arc
+// --- Speed Measurement & Filtering ---
+float targetSpeedTicks = 0.0;
 
-// --- Mission Sequence: Kitchen => Junction => Table 1 => Table 2 => Junction
-// => Kitchen ---
-enum ActionType {
-  ACTION_MOVE,  // Move forward by targetValue (meters)
-  ACTION_TURN,  // Turn by targetValue (degrees: +90 = Left, -90 = Right, 180 =
-                // U-Turn)
-  ACTION_PAUSE, // Pause for targetValue (milliseconds)
-  ACTION_DONE   // Stop and complete
-};
+float rawActualLeftSpeed = 0.0;
+float actualLeftSpeed = 0.0; 
+float lastActualLeftSpeed = 0.0;
 
-struct MissionStep {
-  ActionType type;
-  float targetValue;
-  const char *description;
-};
+float rawActualRightSpeed = 0.0;
+float actualRightSpeed = 0.0; 
+float lastActualRightSpeed = 0.0;
 
-// Scenario: Kitchen -> Junction (2m) -> Table 1 (1m) -> Table 2 (2m across
-// junction) -> Junction (1m) -> Kitchen (2m)
-const MissionStep missionSteps[] = {
-    // 1. Kitchen -> Junction (2m)
-    {ACTION_MOVE, 2.0, "Kitchen -> Junction (2m)"},
-    {ACTION_PAUSE, 1000, "Pause at Junction"},
+// --- Motion States ---
+uint8_t runPhase = 0; // 0: Accelerating, 1: Holding, 2: Decelerating, 3: Pause
 
-    // 2. Turn Left 90° toward Table 1, then Move 1m
-    {ACTION_TURN, 90.0, "Turn Left 90 deg -> Table 1"},
-    {ACTION_PAUSE, 1000, "Pause after Turn"},
-    {ACTION_MOVE, 1.0, "Junction -> Table 1 (1m)"},
-    {ACTION_PAUSE, 2000, "Serve at Table 1 (Pickup)"},
+// --- PID VALUES ---
+float Kp = 4.0;  // Proportional Gain
+float Ki = 1.0;  // Integral Gain
+float Kd = 0.0;  // Derivative Gain
 
-    // 3. Table 1 -> Table 2 (U-Turn 180°, then 2m straight across Junction)
-    {ACTION_TURN, 180.0, "U-Turn 180 deg at Table 1"},
-    {ACTION_PAUSE, 1000, "Pause after U-Turn"},
-    {ACTION_MOVE, 2.0, "Table 1 -> Table 2 (2m across Junction)"},
-    {ACTION_PAUSE, 2000, "Serve at Table 2 (Pickup)"},
+// Wheel synchronization: slow the faster wheel and assist the slower wheel.
+const float K_SYNC_P = 2.0;
+const float K_SYNC_I = 4.0;
+float speedSyncErrorSum = 0.0;
 
-    // 4. Table 2 -> Junction (U-Turn 180°, then 1m)
-    {ACTION_TURN, 180.0, "U-Turn 180 deg at Table 2"},
-    {ACTION_PAUSE, 1000, "Pause after U-Turn"},
-    {ACTION_MOVE, 1.0, "Table 2 -> Junction (1m)"},
-    {ACTION_PAUSE, 1000, "Pause at Junction"},
-
-    // 5. Turn Left 90° toward Kitchen, then Move 2m
-    {ACTION_TURN, 90.0, "Turn Left 90 deg -> Kitchen"},
-    {ACTION_PAUSE, 1000, "Pause after Turn"},
-    {ACTION_MOVE, 2.0, "Junction -> Kitchen (2m)"},
-    {ACTION_PAUSE, 1000, "Arrived at Kitchen"},
-
-    // 6. U-Turn 180° to face front at Kitchen (Ready for next run)
-    {ACTION_TURN, 180.0, "U-Turn 180 deg (Face Outward)"},
-    {ACTION_DONE, 0.0, "Mission Complete"}};
-
-const uint8_t TOTAL_STEPS = sizeof(missionSteps) / sizeof(missionSteps[0]);
-uint8_t currentStepIndex = 0;
-
-float K_sync = 1.5;
-
-// --- PID Controller Struct ---
-struct PIDController {
-  float Kp = 150.0;
-  float Ki = 10.0;
-  float Kd = 1.2;
-
-  float errorSum = 0.0;
-  float lastActualSpeed = 0.0;
-  float actualSpeed = 0.0;
-  long prevTicks = 0;
-
-  // Full reset: clears ALL PID state and syncs prevTicks to current position.
-  // Call this between phases to prevent stale speed/integral from the
-  // previous motion from causing spurious motor commands in the next phase.
-  void fullReset(long currentTicks) {
-    errorSum = 0.0;
-    actualSpeed = 0.0;
-    lastActualSpeed = 0.0;
-    prevTicks = currentTicks;
-  }
-
-  // Legacy alias used by resetBaseline – kept for compatibility.
-  void resetIntegral() { errorSum = 0.0; }
-
-  float compute(long currentTicks, float targetSpeedMPS, float dt) {
-    long deltaTicks = currentTicks - prevTicks;
-    prevTicks = currentTicks;
-
-    float rawActualSpeedMPS = (deltaTicks * METERS_PER_PULSE) / dt;
-    actualSpeed = (0.85 * actualSpeed) + (0.15 * rawActualSpeedMPS);
-
-    float speedError = targetSpeedMPS - actualSpeed;
-    errorSum += speedError * dt;
-    errorSum = constrain(errorSum, -2.0, 2.0);
-
-    float dActualSpeed = (actualSpeed - lastActualSpeed) / dt;
-    lastActualSpeed = actualSpeed;
-
-    float feedforwardPWM = (targetSpeedMPS / CRUISE_SPEED_MPS) * 200.0;
-    float finalPWM = feedforwardPWM + (Kp * speedError) + (Ki * errorSum) -
-                     (Kd * dActualSpeed);
-
-    // Anti-stall floor: use YOUR measured value, not a guess.
-    const float MIN_MOVING_PWM = 60.0; // <-- replace with your measured number
-    if (abs(targetSpeedMPS) > 0.01 && abs(finalPWM) < MIN_MOVING_PWM) {
-      finalPWM = (targetSpeedMPS > 0) ? MIN_MOVING_PWM : -MIN_MOVING_PWM;
-    }
-
-    return finalPWM;
-  }
-};
-
-PIDController pidLeft;
-PIDController pidRight;
+float errorLeftSum = 0.0;
+float errorRightSum = 0.0;
+float lastSpeedError = 0.0;
+long prevLeftTicks = 0;
+long prevRightTicks = 0;
 
 ISR(PCINT1_vect) {
   static uint8_t lastPortC = 0;
-  uint8_t currentPortC = PINC;
+  uint8_t currentPortC = PINC; // Read Port C input register
 
-  if ((currentPortC & (1 << PC4)) && !(lastPortC & (1 << PC4))) {
-    if (currentPortC & (1 << PC5))
-      leftEncoderTicks++;
+  // Left encoder: Phase A = A5/PC5, Phase B = A4/PC4.
+  if ((currentPortC & (1 << PC3)) && !(lastPortC & (1 << PC3))) {
+    if (currentPortC & (1 << PC2))
+      leftEncoderTicks++;  // Forward
     else
-      leftEncoderTicks--;
+      leftEncoderTicks--;  // Reverse
   }
 
-  if ((currentPortC & (1 << PC0)) && !(lastPortC & (1 << PC0))) {
-    if (currentPortC & (1 << PC1))
-      rightEncoderTicks++;
+  // Right encoder: Phase A = A1/PC1, Phase B = A0/PC0.
+  if ((currentPortC & (1 << PC1)) && !(lastPortC & (1 << PC1))) {
+    if (currentPortC & (1 << PC0))
+      rightEncoderTicks--;  // Reverse
     else
-      rightEncoderTicks--;
+      rightEncoderTicks++;  // Forward
   }
   lastPortC = currentPortC;
 }
 
 void setupEncoders() {
-  DDRC &= ~0b00110011;
-  PORTC |= (1 << PC0) | (1 << PC1) | (1 << PC4) | (1 << PC5);
+  // Encoder pins A0, A1, A2 and A3 are inputs with pull-ups.
+  DDRC &= ~0b00111100;
+  PORTC |= (1 << PC0) | (1 << PC1) | (1 << PC2) | (1 << PC3);
   PCICR |= (1 << PCIE1);
-  PCMSK1 |= (1 << PCINT8) | (1 << PCINT12);
-}
-
-void readEncoderTicks(long &leftTicksOut, long &rightTicksOut) {
-  noInterrupts();
-  long rawLeft = leftEncoderTicks;
-  long rawRight = rightEncoderTicks;
-  interrupts();
-
-  leftTicksOut = LEFT_ENC_INVERT ? -rawLeft : rawLeft;
-  rightTicksOut = RIGHT_ENC_INVERT ? -rawRight : rawRight;
+  // Interrupt on Phase A: right A1/PCINT9 and left A3/PCINT11.
+  PCMSK1 |= (1 << PCINT9) | (1 << PCINT11);
 }
 
 void driveMotors(int leftPWM, int rightPWM) {
+  // --- Left Motor ---
   int pwmL = constrain(abs(leftPWM), 0, 255);
   if (leftPWM > 0) {
-    digitalWrite(IN1, HIGH);
-    digitalWrite(IN2, LOW);
+    digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
   } else if (leftPWM < 0) {
-    digitalWrite(IN1, LOW);
-    digitalWrite(IN2, HIGH);
+    digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);
   } else {
-    digitalWrite(IN1, LOW);
-    digitalWrite(IN2, LOW);
+    digitalWrite(IN3, LOW); digitalWrite(IN4, LOW);
   }
-  analogWrite(ENA, pwmL);
+  // The physical left motor is connected to L298N bridge B.
+  analogWrite(ENB, pwmL);
 
+  // --- Right Motor ---
   int pwmR = constrain(abs(rightPWM), 0, 255);
   if (rightPWM > 0) {
-    digitalWrite(IN3, LOW);
-    digitalWrite(IN4, HIGH);
+    digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);
   } else if (rightPWM < 0) {
-    digitalWrite(IN3, HIGH);
-    digitalWrite(IN4, LOW);
+    digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
   } else {
-    digitalWrite(IN3, LOW);
-    digitalWrite(IN4, LOW);
+    digitalWrite(IN1, LOW); digitalWrite(IN2, LOW);
   }
-  analogWrite(ENB, pwmR);
-}
-
-void resetBaseline(long currentLeft, long currentRight) {
-  startLeftTicks = currentLeft;
-  startRightTicks = currentRight;
-  currentRampedSpeedMPS = 0.0;
-  // fullReset syncs prevTicks so the first compute() in the next phase
-  // sees deltaTicks == 0 and does not produce a false speed spike.
-  pidLeft.fullReset(currentLeft);
-  pidRight.fullReset(currentRight);
-}
-
-void startStep(uint8_t stepIndex, long curLeft, long curRight,
-               unsigned long now) {
-  currentStepIndex = stepIndex;
-  stepStartTime = now;
-  resetBaseline(curLeft, curRight);
-
-  if (currentStepIndex < TOTAL_STEPS) {
-    if (missionSteps[currentStepIndex].type == ACTION_TURN) {
-      if (missionSteps[currentStepIndex].targetValue >= 0) {
-        turnIndicatorSet(TURN_LEFT);
-      } else {
-        turnIndicatorSet(TURN_RIGHT);
-      }
-    } else {
-      turnIndicatorSet(TURN_OFF);
-    }
-
-    Serial.print(F("[STEP "));
-    Serial.print(currentStepIndex);
-    Serial.print(F("] "));
-    Serial.println(missionSteps[currentStepIndex].description);
-  }
+  // The physical right motor is connected to L298N bridge A.
+  analogWrite(ENA, pwmR);
 }
 
 void setup() {
   Serial.begin(115200);
-
   DDRB |= 0b00111111;
   setupEncoders();
-  turnIndicatorBegin();
-
-  pidLeft.Kp = 150.0;
-  pidLeft.Ki = 10.0;
-  pidLeft.Kd = 1.2;
-  pidRight.Kp = 150.0;
-  pidRight.Ki = 10.0;
-  pidRight.Kd = 1.2;
-
-  startStep(0, 0, 0, millis());
 }
 
 void loop() {
   unsigned long now = millis();
-  long currentLeftTicks, currentRightTicks;
 
   if (now - lastControlTime >= CONTROL_INTERVAL_MS) {
     float dt = (now - lastControlTime) / 1000.0;
     lastControlTime = now;
 
-    readEncoderTicks(currentLeftTicks, currentRightTicks);
+    noInterrupts();
+    long currentRightTicks = rightEncoderTicks;
+    long currentLeftTicks = leftEncoderTicks;
+    interrupts();
 
-    if (currentStepIndex < TOTAL_STEPS) {
-      switch (missionSteps[currentStepIndex].type) {
-      // --- ACTION: MOVE FORWARD ---
-      case ACTION_MOVE: {
-        float targetDist = missionSteps[currentStepIndex].targetValue;
-        long deltaLeft = currentLeftTicks - startLeftTicks;
-        long deltaRight = currentRightTicks - startRightTicks;
-        float distTraveled =
-            ((deltaLeft + deltaRight) / 2.0) * METERS_PER_PULSE;
-        float distRemaining = targetDist - distTraveled;
+    // 1. Calculate raw actual speed
+    rawActualLeftSpeed = currentLeftTicks - prevLeftTicks;
+    prevLeftTicks = currentLeftTicks;
+    rawActualRightSpeed = currentRightTicks - prevRightTicks;
+    prevRightTicks = currentRightTicks;
 
-        if (distRemaining <= 0.005) {
-          driveMotors(0, 0);
-          startStep(currentStepIndex + 1, currentLeftTicks, currentRightTicks,
-                    now);
-        } else {
-          float desiredSpeed = CRUISE_SPEED_MPS;
-          if (distRemaining < DECEL_DIST_METERS) {
-            desiredSpeed =
-                (distRemaining / DECEL_DIST_METERS) * CRUISE_SPEED_MPS;
-            if (desiredSpeed < 0.08)
-              desiredSpeed = 0.08;
+    // 2. Exponential Moving Average. The result remains a speed measured in
+    // ticks per control interval instead of accumulating into total ticks.
+    constexpr float SPEED_FILTER_ALPHA = 0.15;
+    actualLeftSpeed += SPEED_FILTER_ALPHA * (rawActualLeftSpeed - actualLeftSpeed);
+    actualRightSpeed += SPEED_FILTER_ALPHA * (rawActualRightSpeed - actualRightSpeed);
+
+    // --- State Machine ---
+    switch (runPhase) {
+      case 0: // ACCELERATING TO 100 PWM
+        if (currentRampedPWM < MAX_TARGET_PWM) {
+          currentRampedPWM += ACCEL_STEP;
+          if (currentRampedPWM >= MAX_TARGET_PWM) {
+            currentRampedPWM = MAX_TARGET_PWM;
+            runPhase = 1;               
+            runStartTime = now;         
           }
-
-          if (currentRampedSpeedMPS < desiredSpeed) {
-            currentRampedSpeedMPS += ACCEL_STEP_MPS;
-            if (currentRampedSpeedMPS > desiredSpeed)
-              currentRampedSpeedMPS = desiredSpeed;
-          } else if (currentRampedSpeedMPS > desiredSpeed) {
-            currentRampedSpeedMPS -= ACCEL_STEP_MPS;
-            if (currentRampedSpeedMPS < desiredSpeed)
-              currentRampedSpeedMPS = desiredSpeed;
-          }
-
-          float positionErrorMeters =
-              (deltaLeft - deltaRight) * METERS_PER_PULSE;
-          float syncCorrectionMPS = positionErrorMeters * K_sync;
-
-          float finalLeftPWM = pidLeft.compute(
-              currentLeftTicks, currentRampedSpeedMPS - syncCorrectionMPS, dt);
-          float finalRightPWM = pidRight.compute(
-              currentRightTicks, currentRampedSpeedMPS + syncCorrectionMPS, dt);
-
-          driveMotors((int)finalLeftPWM, (int)finalRightPWM);
         }
         break;
-      }
 
-      // --- ACTION: TURN IN PLACE ---
-      case ACTION_TURN: {
-        float targetDeg = missionSteps[currentStepIndex].targetValue;
-        long targetTicks = (long)((abs(targetDeg) / 180.0) * TARGET_TURN_TICKS);
-        long deltaLeft = abs(currentLeftTicks - startLeftTicks);
-        long deltaRight = abs(currentRightTicks - startRightTicks);
-        long turnTicksProgress = (deltaLeft + deltaRight) / 2;
+      case 1: // HOLDING AT 100 PWM FOR 15 SECONDS
+        currentRampedPWM = MAX_TARGET_PWM;
+        if (now - runStartTime >= HOLD_DURATION_MS) {
+          runPhase = 2;               // Switch to Deceleration Phase
+          errorLeftSum = 0.0;             // Reset accumulated integral memory before ramp-down
+          errorRightSum = 0.0;             // Reset accumulated integral memory before ramp-down
+        }
+        break;
 
-        if (turnTicksProgress >= targetTicks) {
-          driveMotors(0, 0);
-          turnIndicatorSet(TURN_OFF);
-          startStep(currentStepIndex + 1, currentLeftTicks, currentRightTicks,
-                    now);
-        } else {
-          long turnDecelStart = (long)(targetTicks * (1.0 - TURN_DECEL_FRAC));
-          float currentTurnSpeed = TURN_SPEED_MPS;
-          if (turnTicksProgress > turnDecelStart) {
-            float fraction = (float)(targetTicks - turnTicksProgress) /
-                             (targetTicks * TURN_DECEL_FRAC);
-            currentTurnSpeed = max(0.04f, TURN_SPEED_MPS * fraction);
+      case 2: // DECELERATING TO 0 PWM
+        if (currentRampedPWM > 0.0) {
+          currentRampedPWM -= DECEL_STEP;
+          if (currentRampedPWM <= 0.0) {
+            currentRampedPWM = 0.0;
+            runPhase = 3;             
+            runStartTime = now;       
           }
-
-          // targetDeg >= 0 (Left Turn): left motor negative, right motor
-          // positive targetDeg < 0  (Right Turn): left motor positive, right
-          // motor negative
-          float dir = (targetDeg >= 0) ? 1.0 : -1.0;
-
-          float finalLeftPWM =
-              pidLeft.compute(currentLeftTicks, -dir * currentTurnSpeed, dt);
-          float finalRightPWM =
-              pidRight.compute(currentRightTicks, dir * currentTurnSpeed, dt);
-
-          driveMotors((int)finalLeftPWM, (int)finalRightPWM);
         }
         break;
-      }
 
-      // --- ACTION: PAUSE ---
-      case ACTION_PAUSE: {
-        driveMotors(0, 0);
-        if (now - stepStartTime >=
-            (unsigned long)missionSteps[currentStepIndex].targetValue) {
-          startStep(currentStepIndex + 1, currentLeftTicks, currentRightTicks,
-                    now);
+      case 3: // PAUSE FOR 1 SECOND BEFORE REPEATING
+        currentRampedPWM = 0.0;
+        errorLeftSum = 0.0;               
+        errorRightSum = 0.0;               
+        if (now - runStartTime >= PAUSE_DURATION_MS) {
+          runPhase = 0;               
         }
         break;
-      }
+    }
 
-      // --- ACTION: DONE ---
-      case ACTION_DONE: {
-        driveMotors(0, 0);
-        turnIndicatorSet(TURN_OFF);
-        break;
-      }
-      }
+    // 3. PID Speed Control Calculation
+    targetSpeedTicks = (currentRampedPWM / MAX_TARGET_PWM) * MAX_ACTUAL_SPEED_TICKS;
+    float speedLeftError = targetSpeedTicks - actualLeftSpeed;
+    float speedRightError = targetSpeedTicks - actualRightSpeed;
+
+    errorLeftSum += speedLeftError * dt;
+    errorLeftSum = constrain(errorLeftSum, -30.0, 30.0);
+
+    errorRightSum += speedRightError * dt;
+    errorRightSum = constrain(errorRightSum, -30.0, 30.0);
+
+    // Derivative on Measurement
+    float dActualLeftSpeed = (actualLeftSpeed - lastActualLeftSpeed) / dt;
+    float dActualRightSpeed = (actualRightSpeed - lastActualRightSpeed) / dt;
+    lastActualLeftSpeed = actualLeftSpeed;
+    lastActualRightSpeed = actualRightSpeed;
+
+    float finalLeftPWM = currentRampedPWM + (Kp * speedLeftError) + (Ki * errorLeftSum) - (Kd * dActualLeftSpeed);
+    float finalRightPWM = currentRampedPWM + (Kp * speedRightError) + (Ki * errorRightSum) - (Kd * dActualRightSpeed);
+
+    // Cross-coupled PI synchronization. A positive error means the left wheel
+    // is faster, so reduce left PWM and increase right PWM by the same amount.
+    if (runPhase != 3 && currentRampedPWM > 0.0) {
+      float speedSyncError = actualLeftSpeed - actualRightSpeed;
+      speedSyncErrorSum += speedSyncError * dt;
+      speedSyncErrorSum = constrain(speedSyncErrorSum, -15.0, 15.0);
+
+      float syncCorrection =
+          (K_SYNC_P * speedSyncError) + (K_SYNC_I * speedSyncErrorSum);
+      syncCorrection = constrain(syncCorrection, -60.0, 60.0);
+
+      finalLeftPWM -= syncCorrection;
+      finalRightPWM += syncCorrection;
+    } else {
+      speedSyncErrorSum = 0.0;
+    }
+
+    if (runPhase == 2 && finalRightPWM > 0 && finalRightPWM < 35 && finalLeftPWM > 0 && finalLeftPWM < 35 && targetSpeedTicks > 1.0) {
+      finalLeftPWM = 35;
+      finalRightPWM = 35;
+    }
+
+    if (runPhase == 3) {
+      driveMotors(0, 0);
+    } else {
+      driveMotors((int)finalLeftPWM, (int)finalRightPWM);
     }
   }
 
+  // --- Serial Plotter Output ---
   if (now - lastDebugPrintMS >= DEBUG_PRINT_INTERVAL_MS) {
     lastDebugPrintMS = now;
 
-    readEncoderTicks(currentLeftTicks, currentRightTicks);
+    cli();
+    long currentLeftTicks = leftEncoderTicks;
+    long currentRightTicks = rightEncoderTicks;
+    sei();
 
+    Serial.print("TargetSpeed:");
+    Serial.print(targetSpeedTicks);
+    Serial.print(" ");
+    Serial.print("ActualLeftSpeed:");
+    Serial.print(actualLeftSpeed);
+    Serial.print(" ");
+    Serial.print("ActualRightSpeed:");
+    Serial.println(actualRightSpeed);
     Serial.print(currentLeftTicks);
-    Serial.print(",");
+    Serial.print(", ");
     Serial.println(currentRightTicks);
   }
-
-  // Non-blocking animation update for MAX7219 matrix
-  turnIndicatorUpdate();
 }
