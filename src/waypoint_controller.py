@@ -11,18 +11,19 @@ waypoint_controller.py — Closed-Loop Continuous Waypoint Controller
   - Ramping ความเร็วเพื่อไม่ให้อาหารกระฉอก
 """
 
+from __future__ import annotations
+
 import math
 import time
 import logging
-from typing import Callable, Optional, Tuple, TYPE_CHECKING
+from typing import Callable, Optional, Tuple
 
 from config import (
     WHEEL_BASE,
     ARRIVAL_TOLERANCE_M,
     HEADING_TOLERANCE_DEG,
 )
-if TYPE_CHECKING:
-    from motion_client import MotionClient
+from motion_client import MotionClient
 from lidar_safety import LidarSafetyGuard
 
 logger = logging.getLogger(__name__)
