@@ -14,9 +14,9 @@ ISR(PCINT1_vect) {
   // Left encoder: Phase A = A5/PC5, Phase B = A4/PC4.
   if ((currentPortC & (1 << PC5)) && !(lastPortC & (1 << PC5))) {
     if (currentPortC & (1 << PC4))
-      leftEncoderTicks--;
-    else
       leftEncoderTicks++;
+    else
+      leftEncoderTicks--;
   }
 
   // Right encoder: Phase A = A1/PC1, Phase B = A0/PC0.

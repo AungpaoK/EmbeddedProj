@@ -52,6 +52,11 @@ float Kp = 0;    // Proportional Gain
 float Ki = 0;    // Integral Gain
 float Kd = 0;     // Derivative Gain
 
+// Wheel synchronization: slow the faster wheel and assist the slower wheel.
+const float K_SYNC_P = 2.0;
+const float K_SYNC_I = 4.0;
+float speedSyncErrorSum = 0.0;
+
 float errorLeftSum = 0.0;
 float errorRightSum = 0.0;
 float lastSpeedError = 0.0;
@@ -65,9 +70,9 @@ ISR(PCINT1_vect) {
   // Left encoder: Phase A = A5/PC5, Phase B = A4/PC4.
   if ((currentPortC & (1 << PC5)) && !(lastPortC & (1 << PC5))) {
     if (currentPortC & (1 << PC4))
-      leftEncoderTicks--;  // Reverse
-    else
       leftEncoderTicks++;  // Forward
+    else
+      leftEncoderTicks--;  // Reverse
   }
 
   // Right encoder: Phase A = A1/PC1, Phase B = A0/PC0.
@@ -207,6 +212,23 @@ void loop() {
 
     float finalLeftPWM = currentRampedPWM + (Kp * speedLeftError) + (Ki * errorLeftSum) - (Kd * dActualLeftSpeed);
     float finalRightPWM = currentRampedPWM + (Kp * speedRightError) + (Ki * errorRightSum) - (Kd * dActualRightSpeed);
+
+    // Cross-coupled PI synchronization. A positive error means the left wheel
+    // is faster, so reduce left PWM and increase right PWM by the same amount.
+    if (runPhase != 3 && currentRampedPWM > 0.0) {
+      float speedSyncError = actualLeftSpeed - actualRightSpeed;
+      speedSyncErrorSum += speedSyncError * dt;
+      speedSyncErrorSum = constrain(speedSyncErrorSum, -15.0, 15.0);
+
+      float syncCorrection =
+          (K_SYNC_P * speedSyncError) + (K_SYNC_I * speedSyncErrorSum);
+      syncCorrection = constrain(syncCorrection, -60.0, 60.0);
+
+      finalLeftPWM -= syncCorrection;
+      finalRightPWM += syncCorrection;
+    } else {
+      speedSyncErrorSum = 0.0;
+    }
 
     if (runPhase == 2 && finalRightPWM > 0 && finalRightPWM < 35 && finalLeftPWM > 0 && finalLeftPWM < 35 && targetSpeedTicks > 1.0) {
       finalLeftPWM = 35;
