@@ -1,25 +1,25 @@
-#include "roboconfig.h"
+#include "robotconfig.h"
 
 void driveMotors(int leftPWM, int rightPWM) {
   // --- Left Motor ---
   int pwmL = constrain(abs(leftPWM), 0, 255);
   if (leftPWM > 0) {
-    digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+    digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
   } else if (leftPWM < 0) {
-    digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);
+    digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);
   } else {
-    digitalWrite(IN1, LOW); digitalWrite(IN2, LOW);
+    digitalWrite(IN3, LOW); digitalWrite(IN4, LOW);
   }
   analogWrite(ENA, pwmL);
 
   // --- Right Motor ---
   int pwmR = constrain(abs(rightPWM), 0, 255);
   if (rightPWM > 0) {
-    digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH); // Inverted direction for right motor
+    digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);
   } else if (rightPWM < 0) {
-    digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
+    digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
   } else {
-    digitalWrite(IN3, LOW); digitalWrite(IN4, LOW);
+    digitalWrite(IN1, LOW); digitalWrite(IN2, LOW);
   }
   analogWrite(ENB, pwmR);
 }
@@ -32,21 +32,25 @@ void testL298N() {
   Serial.println("1. Moving FORWARD (Speed: 180)");
   driveMotors(180, 180);
   delay(2000);
+  driveMotors(0, 0);
 
   // 2. Reverse Test
   Serial.println("2. Moving REVERSE (Speed: 180)");
   driveMotors(-180, -180);
   delay(2000);
+  driveMotors(0, 0);
 
   // 3. Spin Left
   Serial.println("3. Turning LEFT");
   driveMotors(-180, 180);
   delay(1500);
+  driveMotors(0, 0);
 
   // 4. Spin Right
   Serial.println("4. Turning RIGHT");
   driveMotors(180, -180);
   delay(1500);
+  driveMotors(0, 0);
 
   // 5. Stop
   Serial.println("5. BRAKE / STOP");
