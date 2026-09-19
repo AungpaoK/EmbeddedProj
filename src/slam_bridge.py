@@ -72,7 +72,7 @@ class SlamBridgeNode(Node):
         # Direction inversion settings (แก้ปัญหามอเตอร์กลับขั้ว / เดินถอยหลัง / เลี้ยวกลับด้าน)
         self._invert_linear = os.environ.get("INVERT_LINEAR", "1") == "1"
         self._invert_steer = os.environ.get("INVERT_STEER", "1") == "1"
-        self._invert_odom_yaw = os.environ.get("INVERT_ODOM_YAW", "0") == "1"
+        self._invert_odom_yaw = os.environ.get("INVERT_ODOM_YAW", "1") == "1"
         self._invert_left_enc = os.environ.get("INVERT_LEFT_ENC", "0") == "1"
         self._invert_right_enc = os.environ.get("INVERT_RIGHT_ENC", "0") == "1"
 

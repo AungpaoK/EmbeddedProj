@@ -36,9 +36,29 @@ if [ "$MODE_CHOICE" == "2" ]; then
 fi
 
 echo ""
+echo "เลือกระยะทางในการวิ่งทดสอบ (เลือกตามขนาดพื้นที่จริงของห้อง):"
+echo "  1) ระยะมาตรฐานตามผังร้าน (Junction: 2.0m, Table: 0.6m — ต้องใช้พื้นที่ยาวอย่างน้อย 3m)"
+echo "  2) ระยะย่อสำหรับห้องทดสอบขนาดเล็ก (Junction: 1.0m, Table 0.4m — ใช้พื้นที่ยาวเพียง 1.5m)"
+read -p "เลือกระยะ (1 หรือ 2) [ค่าเริ่มต้น: 1]: " SCALE_CHOICE
+SCALE_CHOICE="${SCALE_CHOICE:-1}"
+
+if [ "$SCALE_CHOICE" == "2" ]; then
+    export JUNCTION_X="1.0"
+    export TABLE1_Y="0.4"
+    export TABLE2_Y="0.4"
+    echo "  📏 ใช้ระยะย่อสำหรับห้องทดสอบ: Junction = 1.0m, Table = 0.4m"
+else
+    export JUNCTION_X="2.0"
+    export TABLE1_Y="0.6"
+    export TABLE2_Y="0.6"
+    echo "  📏 ใช้ระยะมาตรฐาน: Junction = 2.0m, Table = 0.6m"
+fi
+
+echo ""
 echo "🚀 กำลังเริ่มต้นระบบนำทาง..."
 echo "  - Scenario : $SCENARIO_CHOICE"
 echo "  - Mode     : $MODE_ARG"
+echo "  - Distance : Junction=${JUNCTION_X}m, Table=${TABLE1_Y}m"
 echo ""
 echo "💡 หากต้องการดูภาพแผนที่ 3D และตัวหุ่นยนต์ใน RViz2 ให้เปิดอีก Terminal หนึ่งแล้วรัน:"
 echo "     ./run_rviz2_pc.sh src/scenario_view.rviz"
@@ -89,7 +109,9 @@ fi
 if ! python3 -c "import rclpy" 2>/dev/null; then
     if command -v docker &>/dev/null && docker image inspect osrf/ros:jazzy-desktop &>/dev/null; then
         echo "🐳 ตรวจพบว่ารันบน PC Host (กำลังเปิดใช้งานผ่าน Docker osrf/ros:jazzy-desktop)..."
-        docker run -it --rm --net=host --ipc=host -v "$DIR:/workspace" osrf/ros:jazzy-desktop \
+        docker run -it --rm --net=host --ipc=host \
+            -e JUNCTION_X="$JUNCTION_X" -e TABLE1_Y="$TABLE1_Y" -e TABLE2_Y="$TABLE2_Y" \
+            -v "$DIR:/workspace" osrf/ros:jazzy-desktop \
             bash -c "source /opt/ros/jazzy/setup.bash && cd /workspace && python3 src/scenario_runner.py --scenario '$SCENARIO_CHOICE' $MODE_ARG"
         exit 0
     fi

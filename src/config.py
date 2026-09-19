@@ -24,6 +24,8 @@ SHELF_SERIAL_PORT: str = "none"            # Arduino #2 (Shelf) — ตั้ง
 SERIAL_BAUD: int = 115200
 SERIAL_TIMEOUT: float = 1.0
 
+import os
+
 # ===========================================================
 # Waypoint Coordinates (หน่วย: เมตร)
 #   กำหนดให้ Serve Station = (0, 0) หันหน้าไปทาง +X
@@ -31,9 +33,9 @@ SERIAL_TIMEOUT: float = 1.0
 #   Table 1 อยู่ทางซ้าย (Y บวก) = (JUNCTION_X, +TABLE1_Y)
 #   Table 2 อยู่ทางขวา (Y ลบ)  = (JUNCTION_X, -TABLE2_Y)
 # ===========================================================
-JUNCTION_X: float = 2.0      # m — ระยะทางตรงจากครัวถึงทางแยก
-TABLE1_Y: float = 0.6        # m — ระยะทางจากทางแยกถึงโต๊ะ 1 (ซ้าย/เหนือ)
-TABLE2_Y: float = 0.6        # m — ระยะทางจากทางแยกถึงโต๊ะ 2 (ขวา/ใต้)
+JUNCTION_X: float = float(os.environ.get("JUNCTION_X", "2.0"))      # m — ระยะทางตรงจากครัวถึงทางแยก
+TABLE1_Y: float = float(os.environ.get("TABLE1_Y", "0.6"))        # m — ระยะทางจากทางแยกถึงโต๊ะ 1 (ซ้าย/เหนือ)
+TABLE2_Y: float = float(os.environ.get("TABLE2_Y", "0.6"))        # m — ระยะทางจากทางแยกถึงโต๊ะ 2 (ขวา/ใต้)
 
 WAYPOINTS: dict = {
     "home":      (0.0,        0.0),

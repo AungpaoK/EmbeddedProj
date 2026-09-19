@@ -360,7 +360,7 @@ class ScenarioRunnerNode(Node):
     # ------------------------------------------------------------------
     # การควบคุมการเคลื่อนที่ตาม Waypoints (docs/scenario.md)
     # ------------------------------------------------------------------
-    def drive_forward(self, distance: float, speed: float = 0.22):
+    def drive_forward(self, distance: float, speed: float = 0.22) -> bool:
         """สั่งวิ่งตรงตามระยะทางที่กำหนด พร้อมระบบตรวจจับ Stall และ Timeout Watchdog"""
         print(f"  ⬆️ [Motion] เดินหน้า {distance:.2f} เมตร (ความเร็ว {speed:.2f} m/s)...")
         last_x, last_y = self.x, self.y
@@ -370,6 +370,7 @@ class ScenarioRunnerNode(Node):
         start_time = time.time()
         last_progress_time = time.time()
         last_traveled = 0.0
+        success = False
 
         while rclpy.ok() and traveled < distance:
             now_t = time.time()
@@ -397,55 +398,71 @@ class ScenarioRunnerNode(Node):
             last_x, last_y = self.x, self.y
 
         self.stop_robot()
-        print(f"  ✓ [Motion] เดินหน้าสำเร็จ รวมระยะ {traveled:.2f}m (ตำแหน่งปัจจุบัน: X={self.x:.2f}, Y={self.y:.2f})")
+        if traveled >= distance * 0.85:
+            success = True
+            print(f"  ✓ [Motion] เดินหน้าสำเร็จ รวมระยะ {traveled:.2f}m (ตำแหน่งปัจจุบัน: X={self.x:.2f}, Y={self.y:.2f})")
+        else:
+            print(f"  ⚠️ [Motion] เดินหน้าไม่ครบระยะ (ได้ {traveled:.2f}/{distance:.2f}m)")
+        return success
 
-    def turn_degrees(self, degrees: float, speed: float = 0.50):
-        """สั่งหมุนรอบตัวเอง (+ = ซ้าย/CCW, - = ขวา/CW) พร้อมระบบคำนวณแบบ Incremental Yaw"""
+    def turn_degrees(self, degrees: float, speed: float = 0.45) -> bool:
+        """หมุนหุ่นยนต์ไปยังเป้าหมายมุม (Closed-loop Heading Control ตาม Odom Yaw)"""
         direction = "ซ้าย (CCW)" if degrees > 0 else "ขวา (CW)"
-        print(f"  🔄 [Motion] หมุน{direction} {abs(degrees):.1f}°...")
-        target_rad = math.radians(abs(degrees))
-        w = speed if degrees > 0 else -speed
-        last_theta = self.theta
-        accumulated_rad = 0.0
+        target_theta = self.theta + math.radians(degrees)
+        while target_theta > math.pi:
+            target_theta -= 2.0 * math.pi
+        while target_theta < -math.pi:
+            target_theta += 2.0 * math.pi
 
-        max_duration = (target_rad / max(speed, 0.1)) * 2.5 + 5.0
+        print(f"  🔄 [Motion] หมุน{direction} {abs(degrees):.1f}° (เป้าหมาย Yaw: {math.degrees(target_theta):.1f}°)...")
+
+        max_duration = (math.radians(abs(degrees)) / max(speed, 0.1)) * 2.5 + 6.0
         start_time = time.time()
         last_progress_time = time.time()
-        last_accum = 0.0
+        last_err = 999.0
+        success = False
 
-        while rclpy.ok() and accumulated_rad < target_rad:
+        while rclpy.ok():
             now_t = time.time()
             if now_t - start_time > max_duration:
-                print(f"  ⚠️ [Timeout] หมุนครบกำหนดเวลา ({max_duration:.1f}s) หมุนได้ {math.degrees(accumulated_rad):.1f}/{abs(degrees):.1f}°")
+                print(f"  ⚠️ [Timeout] หมุนครบกำหนดเวลา ({max_duration:.1f}s) ยังไม่ถึงเป้าหมาย (Yaw ปัจจุบัน: {math.degrees(self.theta):.1f}°)")
                 break
 
-            if accumulated_rad - last_accum > math.radians(2.0):
+            # คำนวณ error ของมุมในรอบ [-pi, +pi]
+            err = target_theta - self.theta
+            while err > math.pi:
+                err -= 2.0 * math.pi
+            while err < -math.pi:
+                err += 2.0 * math.pi
+
+            if abs(err) < math.radians(5.0):  # ถึงเป้าหมายภายใน ±5°
+                success = True
+                break
+
+            # Stall check: เช็คว่า error ขยับลดลงหรือไม่
+            if abs(err - last_err) > math.radians(1.5):
                 last_progress_time = now_t
-                last_accum = accumulated_rad
+                last_err = err
             elif now_t - last_progress_time > 4.0:
-                print("  ⚠️ [Warning] ไม่พบการหมุนจาก /odom เกิน 4 วินาที! โปรดตรวจดูว่าล้อหมุนหรือไม่")
+                print("  ⚠️ [Warning] ไม่พบการหมุนจาก /odom เกิน 4 วินาที! มอเตอร์อาจติดขัด")
                 last_progress_time = now_t
 
+            # สั่งความเร็วเชิงมุมตามเครื่องหมายของ error
+            turn_w = math.copysign(speed, err)
             self.target_v = 0.0
-            self.target_w = w
+            self.target_w = turn_w
             if self.mode == "robot":
                 cmd = Twist()
-                cmd.angular.z = w
+                cmd.angular.z = turn_w
                 self.cmd_pub.publish(cmd)
             time.sleep(0.05)
 
-            # คำนวณ delta angle ที่ผ่านการ normalize [-pi, +pi]
-            d_th = self.theta - last_theta
-            while d_th > math.pi:
-                d_th -= 2.0 * math.pi
-            while d_th < -math.pi:
-                d_th += 2.0 * math.pi
-
-            accumulated_rad += abs(d_th)
-            last_theta = self.theta
-
         self.stop_robot()
-        print(f"  ✓ [Motion] หมุนสำเร็จ รวม {math.degrees(accumulated_rad):.1f}° (Yaw ปัจจุบัน: {math.degrees(self.theta):.1f}°)")
+        if success:
+            print(f"  ✓ [Motion] หมุนสำเร็จ (Yaw ปัจจุบัน: {math.degrees(self.theta):.1f}°)")
+        else:
+            print(f"  ⚠️ [Motion] การหมุนยังไม่ตรงเป้าหมาย (ได้ Yaw: {math.degrees(self.theta):.1f}°)")
+        return success
 
     def stop_robot(self):
         """หยุดหุ่นยนต์และตัดกำลังขับเคลื่อน"""
@@ -501,41 +518,55 @@ class ScenarioRunnerNode(Node):
             print("Unknown scenario ID.")
 
     def _execute_scenario_1(self):
-        """Scenario 1: Single Table Delivery (ส่ง Table 1 แล้วกลับครัว)"""
+        """Scenario 1: Single Table Delivery (ส่ง Table 1 แล้วกลับครัว) พร้อมระบบป้องกันชนสิ่งกีดขวาง"""
         print("\n--- [Scenario 1] เริ่มต้นส่งอาหารโต๊ะ 1 ---")
         print("1. วางอาหารชั้น 1 กำหนดส่ง Table 1 -> กดยืนยันการออกส่ง (#)")
         time.sleep(1.0)
 
-        # 1. วิ่งตรงไป Junction (2.0m)
-        print("\n[Step 1/6] ออกจากครัว (0, 0) มุ่งหน้าสู่ Junction (2.0, 0)...")
-        self.drive_forward(JUNCTION_X)
+        # 1. วิ่งตรงไป Junction
+        print(f"\n[Step 1/6] ออกจากครัว (0, 0) มุ่งหน้าสู่ Junction ({JUNCTION_X:.2f}, 0)...")
+        if not self.drive_forward(JUNCTION_X):
+            print("  ⚠️ [Safety Abort] การเดินหน้าขัดข้อง ยกเลิกขั้นตอนถัดไปเพื่อความปลอดภัย!")
+            return
 
         # 2. เลี้ยวซ้าย 90° ไป Table 1
         print("\n[Step 2/6] เลี้ยวซ้ายเข้าซอย Table 1...")
-        self.turn_degrees(+90.0)
+        if not self.turn_degrees(+90.0):
+            print("  ⚠️ [Safety Abort] การเลี้ยวขัดข้อง ยกเลิกขั้นตอนถัดไปเพื่อความปลอดภัย!")
+            return
 
-        # 3. วิ่งเข้าเทียบ Table 1 (+0.6m)
-        print("\n[Step 3/6] วิ่งเข้าเทียบจุดจอด Table 1...")
-        self.drive_forward(TABLE1_Y)
+        # 3. วิ่งเข้าเทียบ Table 1
+        print(f"\n[Step 3/6] วิ่งเข้าเทียบจุดจอด Table 1 ({TABLE1_Y:.2f}m)...")
+        if not self.drive_forward(TABLE1_Y):
+            print("  ⚠️ [Safety Abort] การเข้าเทียบโต๊ะขัดข้อง ยกเลิกขั้นตอนถัดไปเพื่อความปลอดภัย!")
+            return
 
         # 4. รอลูกค้าหยิบอาหาร
         self.wait_customer_pickup("Table 1", wait_sec=3.5)
 
         # 5. หมุน U-Turn 180° เดินทางกลับ
         print("[Step 4/6] หมุน U-Turn 180° เพื่อเดินทางกลับครัว...")
-        self.turn_degrees(+180.0)
+        if not self.turn_degrees(+180.0):
+            print("  ⚠️ [Safety Abort] การหมุนกลับตัวขัดข้อง ยกเลิกขั้นตอนถัดไปเพื่อความปลอดภัย!")
+            return
 
         # 6. วิ่งกลับ Junction
         print("[Step 5/6] วิ่งกลับมายัง Junction...")
-        self.drive_forward(TABLE1_Y)
+        if not self.drive_forward(TABLE1_Y):
+            print("  ⚠️ [Safety Abort] การวิ่งกลับทางแยกขัดข้อง ยกเลิกขั้นตอนถัดไปเพื่อความปลอดภัย!")
+            return
 
         # 7. เลี้ยวขวา 90° มุ่งหน้า Serve Station
         print("เลี้ยวขวา 90° มุ่งหน้ากลับครัว...")
-        self.turn_degrees(-90.0)
+        if not self.turn_degrees(-90.0):
+            print("  ⚠️ [Safety Abort] การเลี้ยวขวาเข้าครัวขัดข้อง ยกเลิกขั้นตอนถัดไปเพื่อความปลอดภัย!")
+            return
 
         # 8. วิ่งตรงเข้า Serve Station
-        print("[Step 6/6] วิ่งตรงเข้า Serve Station (0, 0)...")
-        self.drive_forward(JUNCTION_X)
+        print(f"[Step 6/6] วิ่งตรงเข้า Serve Station (0, 0) ระยะ {JUNCTION_X:.2f}m...")
+        if not self.drive_forward(JUNCTION_X):
+            print("  ⚠️ [Safety Abort] การวิ่งเข้าครัวขัดข้อง!")
+            return
 
         # 9. หมุน 180° หันหน้าออกพร้อมรับงานใหม่
         print("หมุนตัว 180° จอดเทียบท่าหันหน้าออก...")
@@ -553,27 +584,26 @@ class ScenarioRunnerNode(Node):
 
         # --- Deliver Table 1 ---
         print("\n>>> ส่งโต๊ะที่ 1 (Table 1) <<<")
-        self.drive_forward(JUNCTION_X)
-        self.turn_degrees(+90.0)
-        self.drive_forward(TABLE1_Y)
+        if not self.drive_forward(JUNCTION_X): return
+        if not self.turn_degrees(+90.0): return
+        if not self.drive_forward(TABLE1_Y): return
         self.wait_customer_pickup("Table 1 (ชั้น 1)", wait_sec=3.0)
 
         # --- Deliver Table 2 ---
         print("\n>>> เดินทางไปส่งโต๊ะที่ 2 (Table 2) <<<")
-        self.turn_degrees(+180.0)
-        self.drive_forward(TABLE1_Y)     # กลับมาที่ Junction
-        # วิ่งตรงข้ามแยกไปยัง Table 2 (ระยะทางเท่ากับ TABLE2_Y)
+        if not self.turn_degrees(+180.0): return
+        if not self.drive_forward(TABLE1_Y): return   # กลับมาที่ Junction
         print("วิ่งตรงข้าม Junction เข้าสู่ Table 2...")
-        self.drive_forward(TABLE2_Y)
+        if not self.drive_forward(TABLE2_Y): return
         self.wait_customer_pickup("Table 2 (ชั้น 2)", wait_sec=3.0)
 
         # --- Return to Kitchen ---
         print("\n>>> ส่งครบทั้ง 2 โต๊ะแล้ว เดินทางกลับครัว <<<")
-        self.turn_degrees(+180.0)
-        self.drive_forward(TABLE2_Y)     # กลับมาที่ Junction
+        if not self.turn_degrees(+180.0): return
+        if not self.drive_forward(TABLE2_Y): return   # กลับมาที่ Junction
         print("เลี้ยวซ้าย 90° เข้าหาครัว...")
-        self.turn_degrees(+90.0)
-        self.drive_forward(JUNCTION_X)   # วิ่งกลับเข้าครัว (0, 0)
+        if not self.turn_degrees(+90.0): return
+        if not self.drive_forward(JUNCTION_X): return # วิ่งกลับเข้าครัว (0, 0)
         print("หมุนตัว 180° จอดเทียบท่าหันหน้าออก...")
         self.turn_degrees(+180.0)
 
