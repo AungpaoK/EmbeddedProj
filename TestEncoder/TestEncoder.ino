@@ -11,33 +11,29 @@ ISR(PCINT1_vect) {
   static uint8_t lastPortC = 0;
   uint8_t currentPortC = PINC; // Read Port C input register
 
-  // Detect rising edge on Phase A
-  if ((currentPortC & (1 << PC3)) && !(lastPortC & (1 << PC3))) {
-    // Check Phase B to determine rotation direction
-    if (currentPortC & (1 << PC2)) {
-      leftEncoderTicks++;  // Forward
-    } else {
-      leftEncoderTicks--;  // Reverse
-    }
+  // Left encoder: Phase A = A5/PC5, Phase B = A4/PC4.
+  if ((currentPortC & (1 << PC5)) && !(lastPortC & (1 << PC5))) {
+    if (currentPortC & (1 << PC4))
+      leftEncoderTicks--;
+    else
+      leftEncoderTicks++;
   }
 
-  // Detect rising edge on Phase A
-  if ((currentPortC & (1 << PC0)) && !(lastPortC & (1 << PC0))) {
-    // Check Phase B to determine rotation direction
-    if (currentPortC & (1 << PC1)) {
-      rightEncoderTicks--;  // Forward
-    } else {
-      rightEncoderTicks++;  // Reverse
-    }
+  // Right encoder: Phase A = A1/PC1, Phase B = A0/PC0.
+  if ((currentPortC & (1 << PC1)) && !(lastPortC & (1 << PC1))) {
+    if (currentPortC & (1 << PC0))
+      rightEncoderTicks--;
+    else
+      rightEncoderTicks++;
   }
   lastPortC = currentPortC;
 }
 
 void setupEncoders() {
-  DDRC &= ~0b00111100;
-  PORTC |= (1 << PC0) | (1 << PC1) | (1 << PC2) | (1 << PC3);
+  DDRC &= ~0b00110011;
+  PORTC |= (1 << PC0) | (1 << PC1) | (1 << PC4) | (1 << PC5);
   PCICR |= (1 << PCIE1);
-  PCMSK1 |= (1 << PCINT9) | (1 << PCINT11);
+  PCMSK1 |= (1 << PCINT9) | (1 << PCINT13);
 }
 
 void setup()

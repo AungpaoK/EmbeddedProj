@@ -62,33 +62,31 @@ ISR(PCINT1_vect) {
   static uint8_t lastPortC = 0;
   uint8_t currentPortC = PINC; // Read Port C input register
 
-  // Detect rising edge on Phase A
-  if ((currentPortC & (1 << PC3)) && !(lastPortC & (1 << PC3))) {
-    // Check Phase B to determine rotation direction
-    if (currentPortC & (1 << PC2)) {
-      leftEncoderTicks++;  // Forward
-    } else {
+  // Left encoder: Phase A = A5/PC5, Phase B = A4/PC4.
+  if ((currentPortC & (1 << PC5)) && !(lastPortC & (1 << PC5))) {
+    if (currentPortC & (1 << PC4))
       leftEncoderTicks--;  // Reverse
-    }
+    else
+      leftEncoderTicks++;  // Forward
   }
 
-  // Detect rising edge on Phase A
-  if ((currentPortC & (1 << PC0)) && !(lastPortC & (1 << PC0))) {
-    // Check Phase B to determine rotation direction
-    if (currentPortC & (1 << PC1)) {
-      rightEncoderTicks--;  // Forward
-    } else {
-      rightEncoderTicks++;  // Reverse
-    }
+  // Right encoder: Phase A = A1/PC1, Phase B = A0/PC0.
+  if ((currentPortC & (1 << PC1)) && !(lastPortC & (1 << PC1))) {
+    if (currentPortC & (1 << PC0))
+      rightEncoderTicks--;  // Reverse
+    else
+      rightEncoderTicks++;  // Forward
   }
   lastPortC = currentPortC;
 }
 
 void setupEncoders() {
-  DDRC &= ~0b00111100;
-  PORTC |= (1 << PC0) | (1 << PC1) | (1 << PC2) | (1 << PC3);
+  // Encoder pins A0, A1, A4 and A5 are inputs with pull-ups.
+  DDRC &= ~0b00110011;
+  PORTC |= (1 << PC0) | (1 << PC1) | (1 << PC4) | (1 << PC5);
   PCICR |= (1 << PCIE1);
-  PCMSK1 |= (1 << PCINT9) | (1 << PCINT11);
+  // Interrupt on Phase A: right A1/PCINT9 and left A5/PCINT13.
+  PCMSK1 |= (1 << PCINT9) | (1 << PCINT13);
 }
 
 void driveMotors(int leftPWM, int rightPWM) {
@@ -139,9 +137,13 @@ void loop() {
     rawActualRightSpeed = currentRightTicks - prevRightTicks;
     prevRightTicks = currentRightTicks;
 
-    // 2. Exponential Moving Average
-    actualLeftSpeed = (actualLeftSpeed) + (rawActualLeftSpeed);
-    actualRightSpeed = (actualRightSpeed) + (rawActualRightSpeed);
+    // 2. Exponential Moving Average. The result remains a speed measured in
+    // ticks per control interval instead of accumulating into total ticks.
+    constexpr float SPEED_FILTER_ALPHA = 0.15;
+    actualLeftSpeed += SPEED_FILTER_ALPHA *
+                       (rawActualLeftSpeed - actualLeftSpeed);
+    actualRightSpeed += SPEED_FILTER_ALPHA *
+                        (rawActualRightSpeed - actualRightSpeed);
 
     // --- State Machine ---
     switch (runPhase) {
@@ -200,6 +202,7 @@ void loop() {
     // Derivative on Measurement
     float dActualLeftSpeed = (actualLeftSpeed - lastActualLeftSpeed) / dt;
     float dActualRightSpeed = (actualRightSpeed - lastActualRightSpeed) / dt;
+    lastActualLeftSpeed = actualLeftSpeed;
     lastActualRightSpeed = actualRightSpeed;
 
     float finalLeftPWM = currentRampedPWM + (Kp * speedLeftError) + (Ki * errorLeftSum) - (Kd * dActualLeftSpeed);
