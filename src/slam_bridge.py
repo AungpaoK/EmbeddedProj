@@ -39,7 +39,7 @@ from config import (
     TICKS_PER_REV,
     METERS_PER_TICK,
     MOTION_SERIAL_PORT,
-    SERIAL_BAUD,
+    MOTION_SERIAL_BAUD,
     SERIAL_TIMEOUT,
 )
 
@@ -139,19 +139,62 @@ class SlamBridgeNode(Node):
 
     def _serial_read_loop(self):
         """อ่านค่า ENCODER:<L>,<R> จาก Arduino #1"""
+        last_rx_time = time.monotonic()
+        last_no_data_warning = 0.0
+        last_read_error_log = 0.0
+        encoder_seen = False
+
         while self._running:
             try:
                 if self._ser.in_waiting == 0:
+                    now = time.monotonic()
+                    if now - last_rx_time >= 3.0 and now - last_no_data_warning >= 5.0:
+                        logger.warning(
+                            "No serial data received from Arduino on %s for %.1fs; "
+                            "port is open, but check the flashed sketch, baud rate (%d), "
+                            "USB data cable, and board reset/power.",
+                            getattr(self._ser, "port", "unknown port"),
+                            now - last_rx_time,
+                            MOTION_SERIAL_BAUD,
+                        )
+                        last_no_data_warning = now
                     time.sleep(0.005)
                     continue
-                line = self._ser.readline().decode("utf-8", errors="ignore").strip()
+
+                raw = self._ser.readline()
+                if not raw:
+                    continue
+
+                last_rx_time = time.monotonic()
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line:
+                    continue
+
                 if line.startswith("ENCODER:"):
                     parts = line[8:].split(",")
                     if len(parts) == 2:
-                        l_ticks = int(parts[0])
-                        r_ticks = int(parts[1])
+                        try:
+                            l_ticks = int(parts[0])
+                            r_ticks = int(parts[1])
+                        except ValueError:
+                            logger.warning("Malformed encoder line from Arduino: %r", line)
+                            continue
+
+                        if not encoder_seen:
+                            logger.info("Received encoder stream from Arduino: %s", line)
+                            encoder_seen = True
                         self._update_odometry(l_ticks, r_ticks)
-            except Exception:
+                    else:
+                        logger.warning("Malformed encoder line from Arduino: %r", line)
+                else:
+                    # Expose STATUS lines or a different firmware's output instead of
+                    # silently discarding it; this distinguishes wrong protocol from no RX.
+                    logger.info("Arduino serial RX (non-ENCODER): %r", line[:160])
+            except Exception as exc:
+                now = time.monotonic()
+                if now - last_read_error_log >= 2.0:
+                    logger.error("Serial read failed on %s: %s", getattr(self._ser, "port", "unknown port"), exc)
+                    last_read_error_log = now
                 time.sleep(0.01)
 
     def _update_odometry(self, l_ticks: int, r_ticks: int):
@@ -258,7 +301,7 @@ def main():
         for p in [port, "/dev/ttyUSB1", "/dev/ttyACM0", "/dev/ttyACM1"]:
             if os.path.exists(p):
                 try:
-                    ser = serial.Serial(p, SERIAL_BAUD, timeout=SERIAL_TIMEOUT)
+                    ser = serial.Serial(p, MOTION_SERIAL_BAUD, timeout=SERIAL_TIMEOUT)
                     logger.info(f"Opened Arduino Motion Port on {p}")
                     break
                 except Exception as e:
