@@ -76,14 +76,22 @@ class SlamBridgeNode(Node):
         self._invert_left_enc = os.environ.get("INVERT_LEFT_ENC", "0") == "1"
         self._invert_right_enc = os.environ.get("INVERT_RIGHT_ENC", "0") == "1"
 
-        # 6WD Skid-Steer Effective Wheelbase Factor (ล้อขัดพื้นขณะเลี้ยว ทำให้ต้องใช้ Track Width เสมือนจริง)
-        self._skid_factor = float(os.environ.get("SKID_FACTOR", "1.0"))
-        self._effective_wheel_base = WHEEL_BASE * self._skid_factor
+        # Differential-drive odometry track-width calibration only.
+        # A physical 360-degree in-place turn measured about 426.7 degrees at
+        # the nominal 0.343 m track, so widen the odometry track by 18.5%.
+        # Keep WHEEL_BASE unchanged for converting cmd_vel into wheel speeds.
+        track_factor = os.environ.get(
+            "ODOM_TRACK_WIDTH_FACTOR",
+            os.environ.get("SKID_FACTOR", "1.185"),
+        )
+        self._odom_track_factor = float(track_factor)
+        self._effective_track_width = WHEEL_BASE * self._odom_track_factor
 
         logger.info(
             f"Drive Config: InvertLinear={self._invert_linear}, InvertSteer={self._invert_steer}, "
             f"InvertOdomYaw={self._invert_odom_yaw}, LeftEncInv={self._invert_left_enc}, "
-            f"RightEncInv={self._invert_right_enc}, SkidFactor={self._skid_factor} (EffW={self._effective_wheel_base:.3f}m)"
+            f"RightEncInv={self._invert_right_enc}, OdomTrackFactor={self._odom_track_factor} "
+            f"(EffectiveTrack={self._effective_track_width:.3f}m)"
         )
 
         # Broadcast Static TF: base_link -> laser และ laser_frame (ทิศทางของ LiDAR)
@@ -225,7 +233,7 @@ class SlamBridgeNode(Node):
         self._prev_r = r_ticks
 
         d = (dl + dr) / 2.0
-        d_theta = (dr - dl) / self._effective_wheel_base
+        d_theta = (dr - dl) / self._effective_track_width
         if self._invert_odom_yaw:
             d_theta = -d_theta
 
