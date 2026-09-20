@@ -47,7 +47,7 @@ tmux send-keys -t "$SESSION:0.1" \
 # ช่องที่ 3 (ล่างซ้าย - Pane 2): SLAM Toolbox (รอ 4 วินาที ให้ TF พร้อม)
 # ------------------------------------------------------------------------------
 tmux send-keys -t "$SESSION:0.2" \
-  "source /opt/ros/jazzy/setup.bash && cd ~/EmbeddedProj/src && sleep 4 && echo '=== [3] Starting SLAM Toolbox ===' && ros2 launch slam_toolbox online_async_launch.py params_file:=./slam_toolbox_config.yaml" C-m
+  "source /opt/ros/jazzy/setup.bash && cd ~/EmbeddedProj/src && sleep 4 && echo '=== [3] Starting SLAM Toolbox ===' && ros2 launch slam_toolbox online_async_launch.py slam_params_file:=./slam_toolbox_config.yaml" C-m
 
 # ------------------------------------------------------------------------------
 # ช่องที่ 4 (ล่างขวา - Pane 3): Teleop Keyboard (รอ 6 วินาที แล้วพร้อมให้กดบังคับ)
