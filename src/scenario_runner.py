@@ -504,7 +504,7 @@ class ScenarioRunnerNode(Node):
                     print("\n  ⚠️ [Hardware Warning] ยังไม่ได้รับข้อมูลจาก /odom เกิน 4 วินาที!")
                     print("     คำแนะนำการตรวจสอบ:")
                     print("     1. slam_bridge.py กำลังทำงานอยู่บน Raspberry Pi หรือไม่")
-                    print("     2. สาย USB ต่อเข้า Arduino #1 เสียบแน่นหรือไม่ (/dev/ttyACM0 หรือ /dev/ttyUSB1)")
+                    print("     2. สาย USB ต่อเข้า Arduino #1 เสียบแน่นหรือไม่ (/dev/ttyACM0)")
                     print("     (กำลังรอสัญญาณต่อไป... หากตรวจพบแล้วจะเริ่มปฏิบัติภารกิจทันที)\n")
                     wait_start = time.time()
 

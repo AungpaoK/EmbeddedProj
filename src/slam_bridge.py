@@ -355,7 +355,8 @@ def main():
     port = os.environ.get("MOTION_PORT", MOTION_SERIAL_PORT)
     ser = None
     if serial and port and port.lower() != "none":
-        for p in [port, "/dev/ttyUSB1", "/dev/ttyACM0", "/dev/ttyACM1"]:
+        # LiDAR is on /dev/ttyUSB1; only try ACM ports for the Motion Arduino.
+        for p in dict.fromkeys([port, "/dev/ttyACM0", "/dev/ttyACM1"]):
             if os.path.exists(p):
                 try:
                     ser = serial.Serial(p, MOTION_SERIAL_BAUD, timeout=SERIAL_TIMEOUT)

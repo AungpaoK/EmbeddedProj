@@ -84,10 +84,10 @@ trap cleanup EXIT INT TERM
 # หากเลือก Real Robot Mode
 if [ "$MODE_CHOICE" == "2" ]; then
     # ตรวจสอบว่าอยู่บน Raspberry Pi ที่ต่อสาย Serial กับ Arduino หรือไม่
-    if [ -e "/dev/ttyACM0" ] || [ -e "/dev/ttyACM1" ] || [ -e "/dev/ttyUSB1" ]; then
+    if [ -e "/dev/ttyACM0" ] || [ -e "/dev/ttyACM1" ]; then
         if ! pgrep -f "slam_bridge.py" > /dev/null; then
             echo "🔌 กำลังเปิดใช้งาน SLAM Hardware Bridge เพื่อเชื่อมต่อไปยัง Arduino..."
-            python3 src/slam_bridge.py > /tmp/slam_bridge.log 2>&1 &
+            MOTION_PORT=/dev/ttyACM0 python3 src/slam_bridge.py > /tmp/slam_bridge.log 2>&1 &
             BRIDGE_PID=$!
             sleep 2.5
             if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then

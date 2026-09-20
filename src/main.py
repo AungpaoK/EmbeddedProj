@@ -9,8 +9,8 @@ main.py — Food Delivery Robot Entry Point (Unified ROS 2 Hybrid System)
     python3 main.py
 
 ตัวเลือก Environment Variable:
-    MOTION_PORT        — Serial port ของ Arduino #1  (default: /dev/ttyUSB0)
-    SHELF_PORT         — Serial port ของ Arduino #2  (default: /dev/ttyUSB1)
+    MOTION_PORT        — Serial port ของ Arduino #1  (default: /dev/ttyACM0)
+    SHELF_PORT         — Serial port ของ Arduino #2  (default: none)
     BAUD_RATE          — Baud rate ทั้งสอง port       (default: 115200)
     LIDAR_YAW_OFFSET   — องศาชดเชยการวาง LiDAR เทียบกับหน้ารถ (default: 0.0)
     LIDAR_STOP_DIST    — ระยะหยุดฉุกเฉิน LiDAR (เมตร, default: 0.50)
@@ -73,8 +73,8 @@ def _find_motion_port(preferred: str) -> str:
     """ค้นหาพอร์ต Arduino #1 อัตโนมัติ หาก preferred port ไม่มีอยู่จริง"""
     if os.path.exists(preferred):
         return preferred
-    # ลองสแกนพอร์ตมาตรฐานอื่นๆ (ข้าม ttyUSB0 ซึ่งเป็น LiDAR)
-    for candidate in ["/dev/ttyUSB1", "/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyUSB2"]:
+    # Arduino ใช้ ttyACM; อย่าหยิบ /dev/ttyUSB1 ซึ่งเป็น LiDAR มาเปิดเป็นมอเตอร์
+    for candidate in ["/dev/ttyACM0", "/dev/ttyACM1"]:
         if os.path.exists(candidate):
             logging.getLogger(__name__).info(f"[Motion] Auto-detected port: {candidate}")
             return candidate

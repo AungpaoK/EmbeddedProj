@@ -35,13 +35,13 @@ tmux select-layout -t "$SESSION:0" tiled
 # ช่องที่ 1 (บนซ้าย - Pane 0): RPLiDAR Node
 # ------------------------------------------------------------------------------
 tmux send-keys -t "$SESSION:0.0" \
-  "source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash 2>/dev/null && echo '=== [1] Starting RPLiDAR ===' && ros2 launch sllidar_ros2 sllidar_a1_launch.py serial_port:=/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0 serial_baudrate:=115200" C-m
+  "source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash 2>/dev/null && echo '=== [1] Starting RPLiDAR ===' && ros2 launch sllidar_ros2 sllidar_a1_launch.py serial_port:=/dev/ttyUSB1 serial_baudrate:=115200" C-m
 
 # ------------------------------------------------------------------------------
 # ช่องที่ 2 (บนขวา - Pane 1): SLAM Bridge (รอ 2 วินาที)
 # ------------------------------------------------------------------------------
 tmux send-keys -t "$SESSION:0.1" \
-  "source /opt/ros/jazzy/setup.bash && cd ~/EmbeddedProj/src && sleep 2 && echo '=== [2] Starting SLAM Bridge ===' && INVERT_ODOM_YAW=0 ODOM_TRACK_WIDTH_FACTOR=1.185 LIDAR_OFFSET_X=0.15 LIDAR_OFFSET_Y=0.0 SELF_FILTER_RADIUS=0.195 python3 slam_bridge.py" C-m
+  "source /opt/ros/jazzy/setup.bash && cd ~/EmbeddedProj/src && sleep 2 && echo '=== [2] Starting SLAM Bridge ===' && MOTION_PORT=/dev/ttyACM0 INVERT_ODOM_YAW=0 ODOM_TRACK_WIDTH_FACTOR=1.185 LIDAR_OFFSET_X=0.15 LIDAR_OFFSET_Y=0.0 SELF_FILTER_RADIUS=0.195 python3 slam_bridge.py" C-m
 
 # ------------------------------------------------------------------------------
 # ช่องที่ 3 (ล่างซ้าย - Pane 2): SLAM Toolbox (รอ 4 วินาที ให้ TF พร้อม)
