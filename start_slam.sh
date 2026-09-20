@@ -35,7 +35,7 @@ tmux select-layout -t "$SESSION:0" tiled
 # ช่องที่ 1 (บนซ้าย - Pane 0): RPLiDAR Node
 # ------------------------------------------------------------------------------
 tmux send-keys -t "$SESSION:0.0" \
-  "source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash 2>/dev/null && echo '=== [1] Starting RPLiDAR ===' && ros2 launch sllidar_ros2 sllidar_a1_launch.py" C-m
+  "source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash 2>/dev/null && echo '=== [1] Starting RPLiDAR ===' && ros2 launch sllidar_ros2 sllidar_a1_launch.py serial_port:=/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0 serial_baudrate:=115200" C-m
 
 # ------------------------------------------------------------------------------
 # ช่องที่ 2 (บนขวา - Pane 1): SLAM Bridge (รอ 2 วินาที)
