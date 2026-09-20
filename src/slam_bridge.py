@@ -17,6 +17,7 @@ import math
 import time
 import threading
 import logging
+import copy
 
 try:
     import serial
@@ -26,8 +27,10 @@ except ImportError:
 try:
     import rclpy
     from rclpy.node import Node
+    from rclpy.qos import qos_profile_sensor_data
     from geometry_msgs.msg import Twist, TransformStamped
     from nav_msgs.msg import Odometry as OdomMsg
+    from sensor_msgs.msg import LaserScan
     import tf2_ros
     HAS_ROS2 = True
 except ImportError:
@@ -52,6 +55,10 @@ class SlamBridgeNode(Node):
         super().__init__("slam_bridge_node")
         self._ser = ser
         self._yaw_offset = math.radians(yaw_offset_deg)
+        self._laser_x = float(os.environ.get("LIDAR_OFFSET_X", "0.15"))
+        self._laser_y = float(os.environ.get("LIDAR_OFFSET_Y", "0.0"))
+        self._self_filter_radius = float(os.environ.get("SELF_FILTER_RADIUS", "0.195"))
+        self._last_self_filter_log = 0.0
 
         # Odometry State
         self._x = 0.0
@@ -68,6 +75,21 @@ class SlamBridgeNode(Node):
         # Publishers & Subscribers
         self._odom_pub = self.create_publisher(OdomMsg, "/odom", 10)
         self._cmd_sub = self.create_subscription(Twist, "/cmd_vel", self._cmd_vel_callback, 10)
+        self._scan_pub = self.create_publisher(LaserScan, "/scan_filtered", qos_profile_sensor_data)
+        self._scan_sub = self.create_subscription(
+            LaserScan,
+            "/scan",
+            self._filter_self_scan,
+            qos_profile_sensor_data,
+        )
+
+        logger.info(
+            "LiDAR self-filter: circular footprint radius=%.3fm, "
+            "laser offset=(%.3f, %.3f)m; publishing /scan_filtered",
+            self._self_filter_radius,
+            self._laser_x,
+            self._laser_y,
+        )
 
         # Direction inversion settings (แก้ปัญหามอเตอร์กลับขั้ว / เดินถอยหลัง / เลี้ยวกลับด้าน)
         self._invert_linear = os.environ.get("INVERT_LINEAR", "1") == "1"
@@ -119,14 +141,39 @@ class SlamBridgeNode(Node):
             t.header.stamp = self.get_clock().now().to_msg()
             t.header.frame_id = "base_link"
             t.child_frame_id = child
-            t.transform.translation.x = 0.15
-            t.transform.translation.y = 0.0
+            t.transform.translation.x = self._laser_x
+            t.transform.translation.y = self._laser_y
             t.transform.translation.z = 0.10
             t.transform.rotation.z = math.sin(half_yaw)
             t.transform.rotation.w = math.cos(half_yaw)
             transforms.append(t)
         for t in transforms:
             self._static_tf_broadcaster.sendTransform(t)
+
+    def _filter_self_scan(self, scan: LaserScan):
+        """Remove LiDAR returns that land inside the robot's circular footprint."""
+        filtered = copy.deepcopy(scan)
+        radius_sq = self._self_filter_radius * self._self_filter_radius
+        masked_count = 0
+
+        for i, distance in enumerate(scan.ranges):
+            if not math.isfinite(distance) or distance < scan.range_min or distance > scan.range_max:
+                continue
+
+            angle = scan.angle_min + i * scan.angle_increment + self._yaw_offset
+            x = self._laser_x + distance * math.cos(angle)
+            y = self._laser_y + distance * math.sin(angle)
+            if x * x + y * y <= radius_sq:
+                # NaN marks a missing return, so SLAM neither inserts the robot
+                # as an obstacle nor ray-traces through the robot to the room.
+                filtered.ranges[i] = float("nan")
+                masked_count += 1
+
+        self._scan_pub.publish(filtered)
+        now = time.monotonic()
+        if masked_count and now - self._last_self_filter_log >= 5.0:
+            logger.info("LiDAR self-filter removed %d/%d robot returns", masked_count, len(scan.ranges))
+            self._last_self_filter_log = now
 
     def _cmd_vel_callback(self, msg: Twist):
         """รับความเร็วจาก teleop แล้วส่ง V:left,right ให้ Arduino"""
