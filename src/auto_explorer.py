@@ -8,7 +8,7 @@ auto_explorer.py — Autonomous Exploration & Map-Building Node
   - ขับสำรวจพื้นที่ว่างอัตโนมัติโดยไม่ต้องใช้ Joy/Teleop
   - ระบบค้นหาช่องเปิด (Corridor & Open-Space Seeking)
   - ระบบหลบหลีกสิ่งกีดขวางแบบ Reactive 360° จาก RPLiDAR
-  - ระบบแก้ทางตันและถอยหลังหนีมุมอับ (Stuck & Dead-End Recovery)
+  - ระบบแก้ทางตันด้วยการหมุนหาทิศโล่ง (Stuck & Dead-End Recovery)
   - ควบคุมความเร็วอย่างนุ่มนวล ป้องกันการลื่นไถลเพื่อรักษาคุณภาพ Odometry
 """
 
@@ -37,7 +37,7 @@ logger = logging.getLogger("AutoExplorer")
 class ExplorerState(Enum):
     CRUISE = 1     # วิ่งสำรวจไปข้างหน้าในทิศทางที่โล่ง
     STEER = 2      # เลี้ยวปรับทิศทางตามช่องว่าง
-    ESCAPE = 3     # ถอยหลังและหมุนกลับตัวเมื่อเจอมุมตัน
+    ESCAPE = 3     # หมุนหาทิศโล่งเมื่อเจอมุมตัน โดยไม่ถอยหลัง
     ROTATE_SCAN = 4  # หมุนตัว 360° ที่จุดเปิดเพื่อกวาดเก็บรายละเอียดแผนที่
 
 
@@ -56,7 +56,7 @@ class AutoExplorer(Node):
         # State Machine
         self.state = ExplorerState.CRUISE
         self.escape_end_time = 0.0
-        self.escape_phase = 0
+        self.escape_turn_speed = 0.0
         self.rotate_end_time = 0.0
 
         # Odometry Progress Watchdog (ตรวจจับกรณีหุ่นยนต์ติดขัด)
@@ -180,6 +180,13 @@ class AutoExplorer(Node):
         self.widest_direction = best_angle
         self.latest_scan_valid = True
 
+    def _start_escape(self, now: float):
+        """Rotate toward the clearer side, keeping the robot's forward axis convention."""
+        self.state = ExplorerState.ESCAPE
+        turn_dir = 1.0 if self.left_dist > self.right_dist else -1.0
+        self.escape_turn_speed = turn_dir * self.turn_speed
+        self.escape_end_time = now + 2.2
+
     def _control_loop(self):
         now_monotonic = time.monotonic()
         if not self.latest_scan_valid or now_monotonic - self.last_scan_time > 0.5:
@@ -201,9 +208,7 @@ class AutoExplorer(Node):
         # ------------------------------------------------------------------
         if self.state == ExplorerState.CRUISE and (now - self.last_progress_time > 4.5):
             logger.warning("Stuck detected! Initiating escape maneuver...")
-            self.state = ExplorerState.ESCAPE
-            self.escape_phase = 1
-            self.escape_end_time = now + 1.8
+            self._start_escape(now)
 
         # ------------------------------------------------------------------
         # 1. หมุนตัว 360° ทุกระยะเวลาเพื่อกวาดแผนที่ให้เต็มห้อง
@@ -226,24 +231,14 @@ class AutoExplorer(Node):
                 self.state = ExplorerState.CRUISE
 
         elif self.state == ExplorerState.ESCAPE:
-            # Phase 1: ถอยหลังช้าๆ ออกจากมุมตัน
-            if self.escape_phase == 1:
-                if now < self.escape_end_time:
-                    cmd.linear.x = -0.12
-                    cmd.angular.z = 0.0
-                else:
-                    # Phase 2: หมุนกลับตัว 90°-135° ไปทางที่โล่งกว่า
-                    self.escape_phase = 2
-                    turn_dir = 1.0 if self.left_dist > self.right_dist else -1.0
-                    self.escape_end_time = now + 2.2
-                    self.escape_turn_speed = turn_dir * self.turn_speed
-            elif self.escape_phase == 2:
-                if now < self.escape_end_time:
-                    cmd.linear.x = 0.0
-                    cmd.angular.z = self.escape_turn_speed
-                else:
-                    self.state = ExplorerState.CRUISE
-                    self.last_progress_time = now
+            # Keep linear.x at zero during recovery. Cruise/steer use positive
+            # linear.x, matching the forward command from teleop key 'i'.
+            if now < self.escape_end_time:
+                cmd.linear.x = 0.0
+                cmd.angular.z = self.escape_turn_speed
+            else:
+                self.state = ExplorerState.CRUISE
+                self.last_progress_time = now
 
         elif self.state == ExplorerState.STEER:
             # เลี้ยวปรับมุมหาช่องเปิด
@@ -258,9 +253,7 @@ class AutoExplorer(Node):
             # ตรวจสอบระยะฉุกเฉิน
             if self.front_dist < self.emergency_dist:
                 logger.warning(f"Emergency close distance ({self.front_dist:.2f}m)! Escaping...")
-                self.state = ExplorerState.ESCAPE
-                self.escape_phase = 1
-                self.escape_end_time = now + 1.5
+                self._start_escape(now)
             elif self.front_dist < self.front_stop_dist:
                 # ข้างหน้าเริ่มติด เลี้ยวหาช่องว่าง
                 self.state = ExplorerState.STEER
