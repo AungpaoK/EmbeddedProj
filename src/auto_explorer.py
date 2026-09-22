@@ -91,6 +91,7 @@ class AutoExplorer(Node):
         # เก็บผลวิเคราะห์ LaserScan ล่าสุด
         self.latest_scan_valid = False
         self.front_dist = float("inf")
+        self.front_angle_deg = 0.0
         self.front_left_dist = float("inf")
         self.front_right_dist = float("inf")
         self.left_dist = float("inf")
@@ -144,7 +145,7 @@ class AutoExplorer(Node):
 
             # แบ่งโซนด้านหน้าและด้านข้าง
             if -25.0 <= deg <= 25.0:
-                zone_front.append(r)
+                zone_front.append((r, deg))
             elif 25.0 < deg <= 65.0:
                 zone_fl.append(r)
             elif -65.0 <= deg < -25.0:
@@ -159,7 +160,8 @@ class AutoExplorer(Node):
             sectors[sector_idx].append(r)
 
         # คำนวณระยะเฉลี่ย/ขั้นต่ำของแต่ละโซน
-        self.front_dist = min(zone_front) if zone_front else 10.0
+        front_hit = min(zone_front, key=lambda hit: hit[0]) if zone_front else (10.0, 0.0)
+        self.front_dist, self.front_angle_deg = front_hit
         self.front_left_dist = min(zone_fl) if zone_fl else 10.0
         self.front_right_dist = min(zone_fr) if zone_fr else 10.0
         self.left_dist = min(zone_left) if zone_left else 10.0
@@ -252,7 +254,10 @@ class AutoExplorer(Node):
         elif self.state == ExplorerState.CRUISE:
             # ตรวจสอบระยะฉุกเฉิน
             if self.front_dist < self.emergency_dist:
-                logger.warning(f"Emergency close distance ({self.front_dist:.2f}m)! Escaping...")
+                logger.warning(
+                    f"Emergency close distance ({self.front_dist:.2f}m at "
+                    f"{self.front_angle_deg:+.1f}°)! Escaping..."
+                )
                 self._start_escape(now)
             elif self.front_dist < self.front_stop_dist:
                 # ข้างหน้าเริ่มติด เลี้ยวหาช่องว่าง
