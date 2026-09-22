@@ -48,15 +48,42 @@ class AutoExplorer(Node):
         # พารามิเตอร์ความเร็วและระยะปลอดภัย (ปรับแต่งผ่าน Environment Variables ได้)
         self.cruise_speed = float(os.environ.get("CRUISE_SPEED", "0.20"))      # m/s
         self.turn_speed = float(os.environ.get("TURN_SPEED", "0.55"))          # rad/s
-        # Recovery needs more wheel torque than normal steering.  Ramp the turn
-        # speed so a loaded motor can break static friction without an abrupt
-        # command that would degrade the SLAM pose estimate.
-        self.escape_min_turn_speed = float(os.environ.get("ESCAPE_MIN_TURN_SPEED", "0.80"))
-        self.escape_max_turn_speed = float(os.environ.get("ESCAPE_MAX_TURN_SPEED", "1.20"))
-        self.escape_ramp_time = max(0.1, float(os.environ.get("ESCAPE_RAMP_TIME", "1.0")))
+        # Escape speed is closed-loop: if encoder odometry says the chassis is
+        # still not turning fast enough, raise the command until it breaks free.
+        self.escape_min_turn_speed = float(os.environ.get("ESCAPE_MIN_TURN_SPEED", "1.20"))
+        self.escape_max_turn_speed = max(
+            self.escape_min_turn_speed,
+            float(os.environ.get("ESCAPE_MAX_TURN_SPEED", "2.40")),
+        )
+        self.escape_speed_step = max(0.05, float(os.environ.get("ESCAPE_SPEED_STEP", "0.30")))
+        self.escape_feedback_interval = max(
+            0.2,
+            float(os.environ.get("ESCAPE_FEEDBACK_INTERVAL", "0.35")),
+        )
+        self.escape_min_yaw_rate = max(
+            0.05,
+            float(os.environ.get("ESCAPE_MIN_YAW_RATE", "0.60")),
+        )
         self.escape_duration = max(
-            self.escape_ramp_time,
-            float(os.environ.get("ESCAPE_DURATION", "2.0")),
+            self.escape_feedback_interval * 2.0,
+            float(os.environ.get("ESCAPE_DURATION", "2.5")),
+        )
+        self.drive_start_speed = max(
+            self.cruise_speed,
+            float(os.environ.get("DRIVE_START_SPEED", "0.25")),
+        )
+        self.drive_max_speed = max(
+            self.drive_start_speed,
+            float(os.environ.get("DRIVE_MAX_SPEED", "0.45")),
+        )
+        self.drive_speed_step = max(0.01, float(os.environ.get("DRIVE_SPEED_STEP", "0.05")))
+        self.drive_feedback_interval = max(
+            0.2,
+            float(os.environ.get("DRIVE_FEEDBACK_INTERVAL", "0.35")),
+        )
+        self.drive_min_encoder_speed = max(
+            0.01,
+            float(os.environ.get("DRIVE_MIN_ENCODER_SPEED", "0.08")),
         )
         self.chassis_clearance = float(os.environ.get("CHASSIS_CLEARANCE", "0.22")) # เมตร: ตัดจุดสะท้อนเสา/โครงสร้างตัวถังด้านใน (เสาอยู่ที่ ~0.17m)
         self.emergency_dist = float(os.environ.get("EMERGENCY_DIST", "0.32"))  # เมตร: ถอยหลังทันทีถ้าประชิดเกินไป (> clearance)
@@ -69,6 +96,11 @@ class AutoExplorer(Node):
         self.escape_start_time = 0.0
         self.escape_end_time = 0.0
         self.escape_turn_direction = 0.0
+        self.escape_command_speed = self.escape_min_turn_speed
+        self.escape_feedback_time = 0.0
+        self.escape_feedback_yaw = 0.0
+        self.escape_motion_confirmed = False
+        self.escape_max_warning_logged = False
         self.rotate_end_time = 0.0
 
         # Odometry Progress Watchdog (ตรวจจับกรณีหุ่นยนต์ติดขัด)
@@ -77,6 +109,15 @@ class AutoExplorer(Node):
         self.last_progress_time = time.time()
         self.current_x = 0.0
         self.current_y = 0.0
+        self.current_yaw = 0.0
+        self.odom_received = False
+        self.drive_feedback_active = False
+        self.drive_command_speed = self.drive_start_speed
+        self.drive_feedback_time = 0.0
+        self.drive_feedback_x = 0.0
+        self.drive_feedback_y = 0.0
+        self.drive_motion_confirmed = False
+        self.drive_max_warning_logged = False
 
         # Stop if sensor data goes stale while exploring autonomously.
         self.last_scan_time = 0.0
@@ -114,6 +155,7 @@ class AutoExplorer(Node):
             f"Auto Explorer initialized: Clearance={self.chassis_clearance:.2f}m, "
             f"Emergency={self.emergency_dist:.2f}m, Stop={self.front_stop_dist:.2f}m, "
             f"Cruise={self.cruise_speed:.2f}m/s, "
+            f"DriveAdaptive={self.drive_start_speed:.2f}-{self.drive_max_speed:.2f}m/s, "
             f"Escape={self.escape_min_turn_speed:.2f}-{self.escape_max_turn_speed:.2f}rad/s, "
             f"Scan={self.scan_topic}"
         )
@@ -121,6 +163,12 @@ class AutoExplorer(Node):
     def _odom_callback(self, msg: Odometry):
         self.current_x = msg.pose.pose.position.x
         self.current_y = msg.pose.pose.position.y
+        q = msg.pose.pose.orientation
+        self.current_yaw = math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+        )
+        self.odom_received = True
 
         # ตรวจสอบว่าเคลื่อนที่จริงหรือไม่ (ป้องกันติดขัด / ล้อฟรี)
         dist_moved = math.hypot(self.current_x - self.last_pos_x, self.current_y - self.last_pos_y)
@@ -198,22 +246,151 @@ class AutoExplorer(Node):
 
     def _start_escape(self, now: float):
         """Rotate toward the clearer side, keeping the robot's forward axis convention."""
+        self._reset_drive_feedback()
         self.state = ExplorerState.ESCAPE
         self.escape_turn_direction = 1.0 if self.left_dist > self.right_dist else -1.0
         self.escape_start_time = now
         self.escape_end_time = now + self.escape_duration
+        self.escape_command_speed = self.escape_min_turn_speed
+        self.escape_feedback_time = now
+        self.escape_feedback_yaw = self.current_yaw
+        self.escape_motion_confirmed = False
+        self.escape_max_warning_logged = False
         logger.info(
-            "Escape turn: ramping %.2f -> %.2f rad/s for %.1fs toward %s",
+            "Escape turn: encoder-adaptive %.2f -> %.2f rad/s for %.1fs toward %s",
             self.escape_min_turn_speed,
             self.escape_max_turn_speed,
             self.escape_duration,
             "left" if self.escape_turn_direction > 0.0 else "right",
         )
 
+    def _reset_drive_feedback(self):
+        self.drive_feedback_active = False
+        self.drive_motion_confirmed = False
+        self.drive_max_warning_logged = False
+
+    def _adaptive_drive_speed(self, now: float, requested_speed: float) -> float:
+        """Raise forward speed when encoder odometry says the robot is barely moving."""
+        if not self.drive_feedback_active:
+            self.drive_feedback_active = True
+            self.drive_command_speed = max(requested_speed, self.drive_start_speed)
+            self.drive_feedback_time = now
+            self.drive_feedback_x = self.current_x
+            self.drive_feedback_y = self.current_y
+            self.drive_motion_confirmed = False
+            self.drive_max_warning_logged = False
+            logger.info(
+                "Forward drive: encoder-adaptive %.2f -> %.2f m/s",
+                self.drive_command_speed,
+                self.drive_max_speed,
+            )
+            return self.drive_command_speed
+
+        self.drive_command_speed = max(self.drive_command_speed, requested_speed)
+        elapsed = now - self.drive_feedback_time
+        if elapsed < self.drive_feedback_interval:
+            return self.drive_command_speed
+
+        if not self.odom_received:
+            logger.warning(
+                "Forward drive has no encoder odometry feedback; holding %.2f m/s",
+                self.drive_command_speed,
+            )
+            self.drive_feedback_time = now
+            return self.drive_command_speed
+
+        distance = math.hypot(
+            self.current_x - self.drive_feedback_x,
+            self.current_y - self.drive_feedback_y,
+        )
+        measured_speed = distance / max(elapsed, 1e-3)
+
+        if measured_speed < self.drive_min_encoder_speed:
+            old_speed = self.drive_command_speed
+            self.drive_command_speed = min(
+                self.drive_max_speed,
+                self.drive_command_speed + self.drive_speed_step,
+            )
+            if self.drive_command_speed > old_speed:
+                logger.warning(
+                    "Forward encoder speed %.2f m/s is too low; boosting command %.2f -> %.2f m/s",
+                    measured_speed,
+                    old_speed,
+                    self.drive_command_speed,
+                )
+            elif not self.drive_max_warning_logged:
+                logger.error(
+                    "Forward encoder speed remains %.2f m/s at maximum command %.2f m/s",
+                    measured_speed,
+                    self.drive_command_speed,
+                )
+                self.drive_max_warning_logged = True
+        elif not self.drive_motion_confirmed:
+            logger.info(
+                "Forward motion confirmed by encoder: %.2f m/s at command %.2f m/s",
+                measured_speed,
+                self.drive_command_speed,
+            )
+            self.drive_motion_confirmed = True
+
+        self.drive_feedback_time = now
+        self.drive_feedback_x = self.current_x
+        self.drive_feedback_y = self.current_y
+        return self.drive_command_speed
+
+    def _update_escape_speed(self, now: float):
+        """Increase escape torque when encoder odometry reports insufficient rotation."""
+        elapsed = now - self.escape_feedback_time
+        if elapsed < self.escape_feedback_interval:
+            return
+
+        if not self.odom_received:
+            logger.warning("Escape has no encoder odometry feedback; holding %.2f rad/s", self.escape_command_speed)
+            self.escape_feedback_time = now
+            return
+
+        yaw_delta = math.atan2(
+            math.sin(self.current_yaw - self.escape_feedback_yaw),
+            math.cos(self.current_yaw - self.escape_feedback_yaw),
+        )
+        measured_yaw_rate = abs(yaw_delta) / max(elapsed, 1e-3)
+
+        if measured_yaw_rate < self.escape_min_yaw_rate:
+            old_speed = self.escape_command_speed
+            self.escape_command_speed = min(
+                self.escape_max_turn_speed,
+                self.escape_command_speed + self.escape_speed_step,
+            )
+            if self.escape_command_speed > old_speed:
+                logger.warning(
+                    "Escape encoder rate %.2f rad/s is too low; boosting command %.2f -> %.2f rad/s",
+                    measured_yaw_rate,
+                    old_speed,
+                    self.escape_command_speed,
+                )
+            elif not self.escape_max_warning_logged:
+                logger.error(
+                    "Escape encoder rate remains %.2f rad/s at maximum command %.2f rad/s",
+                    measured_yaw_rate,
+                    self.escape_command_speed,
+                )
+                self.escape_max_warning_logged = True
+        elif not self.escape_motion_confirmed:
+            logger.info(
+                "Escape motion confirmed by encoder: %.2f rad/s at command %.2f rad/s",
+                measured_yaw_rate,
+                self.escape_command_speed,
+            )
+            self.escape_motion_confirmed = True
+
+        self.escape_feedback_time = now
+        self.escape_feedback_yaw = self.current_yaw
+
     def _control_loop(self):
         now_monotonic = time.monotonic()
         if not self.latest_scan_valid or now_monotonic - self.last_scan_time > 0.5:
             # Never keep driving with an old scan if LiDAR or DDS drops out.
+            self._reset_drive_feedback()
             self.cmd_pub.publish(Twist())
             if (
                 self.latest_scan_valid
@@ -247,6 +424,7 @@ class AutoExplorer(Node):
         # 2. State Machine การนำทางสำรวจ
         # ------------------------------------------------------------------
         if self.state == ExplorerState.ROTATE_SCAN:
+            self._reset_drive_feedback()
             if now < self.rotate_end_time:
                 cmd.linear.x = 0.0
                 cmd.angular.z = self.turn_speed
@@ -254,23 +432,22 @@ class AutoExplorer(Node):
                 self.state = ExplorerState.CRUISE
 
         elif self.state == ExplorerState.ESCAPE:
-            # Keep linear.x at zero during recovery. Cruise/steer use positive
+            self._reset_drive_feedback()
+            # Keep linear.x at zero during recovery. Cruise uses positive
             # linear.x, matching the forward command from teleop key 'i'.
             if now < self.escape_end_time:
                 cmd.linear.x = 0.0
-                ramp_ratio = min(1.0, (now - self.escape_start_time) / self.escape_ramp_time)
-                escape_speed = self.escape_min_turn_speed + ramp_ratio * (
-                    self.escape_max_turn_speed - self.escape_min_turn_speed
-                )
-                cmd.angular.z = self.escape_turn_direction * escape_speed
+                self._update_escape_speed(now)
+                cmd.angular.z = self.escape_turn_direction * self.escape_command_speed
             else:
                 self.state = ExplorerState.CRUISE
                 self.last_progress_time = now
 
         elif self.state == ExplorerState.STEER:
+            self._reset_drive_feedback()
             # เลี้ยวปรับมุมหาช่องเปิด
             turn_bias = 1.0 if self.front_left_dist > self.front_right_dist else -1.0
-            cmd.linear.x = 0.05
+            cmd.linear.x = 0.0
             cmd.angular.z = turn_bias * self.turn_speed
 
             if self.front_dist > self.front_stop_dist + 0.15:
@@ -291,7 +468,8 @@ class AutoExplorer(Node):
                 # ข้างหน้าโล่ง วิ่งไปข้างหน้าพร้อมเบี่ยงพวงมาลัยเข้าหาช่องกว้าง
                 # ชะลอความเร็วตามระยะทางข้างหน้า
                 speed_ratio = min(1.0, max(0.4, (self.front_dist - self.front_stop_dist) / 1.0))
-                cmd.linear.x = self.cruise_speed * speed_ratio
+                requested_speed = self.cruise_speed * speed_ratio
+                cmd.linear.x = self._adaptive_drive_speed(now, requested_speed)
 
                 # เลี้ยวปรับหาช่องกว้างอย่างนุ่มนวล
                 # มีแรงผลักจากกำแพงด้านข้าง (Wall Repulsion) ป้องกันชนขอบ
