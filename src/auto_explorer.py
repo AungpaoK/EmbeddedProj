@@ -22,6 +22,7 @@ from enum import Enum
 try:
     import rclpy
     from rclpy.node import Node
+    from rclpy.qos import qos_profile_sensor_data
     from geometry_msgs.msg import Twist
     from sensor_msgs.msg import LaserScan
     from nav_msgs.msg import Odometry
@@ -65,13 +66,23 @@ class AutoExplorer(Node):
         self.current_x = 0.0
         self.current_y = 0.0
 
+        # Stop if sensor data goes stale while exploring autonomously.
+        self.last_scan_time = 0.0
+        self.last_scan_warning_time = 0.0
+
         # รอบการหมุน 360° เพื่อเปิดแมป
         self.last_full_scan_time = time.time()
         self.scan_interval = 25.0       # ทุกๆ 25 วินาทีให้หยุดหมุนรอบตัว 360° กวาดแมป
 
         # ROS 2 Subscriptions & Publications
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
-        self.scan_sub = self.create_subscription(LaserScan, "/scan", self._scan_callback, 10)
+        self.scan_topic = os.environ.get("SCAN_TOPIC", "/scan_filtered")
+        self.scan_sub = self.create_subscription(
+            LaserScan,
+            self.scan_topic,
+            self._scan_callback,
+            qos_profile_sensor_data,
+        )
         self.odom_sub = self.create_subscription(Odometry, "/odom", self._odom_callback, 10)
 
         # Loop ประมวลผลควบคุมที่ 10 Hz
@@ -88,7 +99,8 @@ class AutoExplorer(Node):
 
         logger.info(
             f"Auto Explorer initialized: Clearance={self.chassis_clearance:.2f}m, "
-            f"Emergency={self.emergency_dist:.2f}m, Stop={self.front_stop_dist:.2f}m, Cruise={self.cruise_speed:.2f}m/s"
+            f"Emergency={self.emergency_dist:.2f}m, Stop={self.front_stop_dist:.2f}m, "
+            f"Cruise={self.cruise_speed:.2f}m/s, Scan={self.scan_topic}"
         )
 
     def _odom_callback(self, msg: Odometry):
@@ -103,6 +115,7 @@ class AutoExplorer(Node):
             self.last_progress_time = time.time()
 
     def _scan_callback(self, msg: LaserScan):
+        self.last_scan_time = time.monotonic()
         ranges = msg.ranges
         num_points = len(ranges)
         if num_points == 0:
@@ -168,7 +181,16 @@ class AutoExplorer(Node):
         self.latest_scan_valid = True
 
     def _control_loop(self):
-        if not self.latest_scan_valid:
+        now_monotonic = time.monotonic()
+        if not self.latest_scan_valid or now_monotonic - self.last_scan_time > 0.5:
+            # Never keep driving with an old scan if LiDAR or DDS drops out.
+            self.cmd_pub.publish(Twist())
+            if (
+                self.latest_scan_valid
+                and now_monotonic - self.last_scan_warning_time >= 2.0
+            ):
+                logger.warning("Laser scan %s is stale; publishing stop command", self.scan_topic)
+                self.last_scan_warning_time = now_monotonic
             return
 
         now = time.time()

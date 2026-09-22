@@ -8,6 +8,10 @@
 # ==============================================================================
 
 SESSION="slam"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$DIR/src/resolve_lidar_port.sh"
+LIDAR_PORT="$(resolve_lidar_port)" || exit 1
+echo "Using RPLiDAR serial port: $LIDAR_PORT"
 
 # ตรวจสอบว่ามี tmux ติดตั้งอยู่หรือไม่
 if ! command -v tmux &> /dev/null; then
@@ -35,7 +39,7 @@ tmux select-layout -t "$SESSION:0" tiled
 # ช่องที่ 1 (บนซ้าย - Pane 0): RPLiDAR Node
 # ------------------------------------------------------------------------------
 tmux send-keys -t "$SESSION:0.0" \
-  "source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash 2>/dev/null && echo '=== [1] Starting RPLiDAR ===' && ros2 launch sllidar_ros2 sllidar_a1_launch.py serial_port:=/dev/ttyUSB1 serial_baudrate:=115200" C-m
+  "source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash 2>/dev/null && echo '=== [1] Starting RPLiDAR on $LIDAR_PORT ===' && ros2 launch sllidar_ros2 sllidar_a1_launch.py serial_port:=$LIDAR_PORT serial_baudrate:=115200" C-m
 
 # ------------------------------------------------------------------------------
 # ช่องที่ 2 (บนขวา - Pane 1): SLAM Bridge (รอ 2 วินาที)

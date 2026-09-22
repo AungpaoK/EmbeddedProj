@@ -69,6 +69,8 @@ source /opt/ros/jazzy/setup.bash 2>/dev/null || true
 source ~/ros2_ws/install/setup.bash 2>/dev/null || true
 
 BRIDGE_PID=""
+MOTION_PORT="${MOTION_PORT:-/dev/ttyACM0}"
+BRIDGE_LOG="/tmp/scenario_slam_bridge.log"
 
 cleanup() {
     echo ""
@@ -87,17 +89,34 @@ if [ "$MODE_CHOICE" == "2" ]; then
     if [ -e "/dev/ttyACM0" ] || [ -e "/dev/ttyACM1" ]; then
         if ! pgrep -f "slam_bridge.py" > /dev/null; then
             echo "🔌 กำลังเปิดใช้งาน SLAM Hardware Bridge เพื่อเชื่อมต่อไปยัง Arduino..."
-            MOTION_PORT=/dev/ttyACM0 python3 src/slam_bridge.py > /tmp/slam_bridge.log 2>&1 &
+            : > "$BRIDGE_LOG"
+            MOTION_PORT="$MOTION_PORT" \
+            INVERT_ODOM_YAW=0 \
+            ODOM_TRACK_WIDTH_FACTOR=1.185 \
+            LIDAR_OFFSET_X=0.15 \
+            LIDAR_OFFSET_Y=0.0 \
+            SELF_FILTER_RADIUS=0.195 \
+                python3 src/slam_bridge.py > "$BRIDGE_LOG" 2>&1 &
             BRIDGE_PID=$!
-            sleep 2.5
-            if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
-                echo "❌ ไม่สามารถเปิด slam_bridge.py ได้! บันทึกข้อผิดพลาด:"
-                cat /tmp/slam_bridge.log
+            # ตรวจว่า bridge เปิด serial กับ Arduino ได้จริง ไม่ใช่แค่โปรเซสยังอยู่
+            for _ in {1..30}; do
+                if ! kill -0 "$BRIDGE_PID" 2>/dev/null; then
+                    break
+                fi
+                if grep -q "Opened Arduino Motion Port on " "$BRIDGE_LOG"; then
+                    break
+                fi
+                sleep 0.2
+            done
+            if ! grep -q "Opened Arduino Motion Port on " "$BRIDGE_LOG"; then
+                echo "❌ เปิด Arduino serial ไม่สำเร็จผ่าน $MOTION_PORT"
+                echo "บันทึกข้อผิดพลาดจาก bridge:"
+                cat "$BRIDGE_LOG"
                 exit 1
             fi
-            echo "✓ เชื่อมต่อกับบอร์ด Arduino สำเร็จ (PID: $BRIDGE_PID)"
+            echo "✓ Bridge เปิดพอร์ต Arduino สำเร็จ (PID: $BRIDGE_PID)"
         else
-            echo "✓ ตรวจพบ slam_bridge.py กำลังทำงานอยู่แล้ว"
+            echo "✓ ใช้ slam_bridge.py ที่กำลังทำงานอยู่แล้ว"
         fi
     else
         echo "🌐 Real Robot Mode (เชื่อมต่อผ่าน ROS 2 Network):"

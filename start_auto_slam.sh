@@ -8,6 +8,10 @@
 # ==============================================================================
 
 SESSION="slam"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$DIR/src/resolve_lidar_port.sh"
+LIDAR_PORT="$(resolve_lidar_port)" || exit 1
+echo "Using RPLiDAR serial port: $LIDAR_PORT"
 
 # ตรวจสอบว่ามี tmux ติดตั้งอยู่หรือไม่
 if ! command -v tmux &> /dev/null; then
@@ -35,25 +39,25 @@ tmux select-layout -t "$SESSION:0" tiled
 # ช่องที่ 1 (บนซ้าย - Pane 0): RPLiDAR Node
 # ------------------------------------------------------------------------------
 tmux send-keys -t "$SESSION:0.0" \
-  "source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash 2>/dev/null && echo '=== [1] Starting RPLiDAR ===' && ros2 launch sllidar_ros2 sllidar_a1_launch.py" C-m
+  "source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash 2>/dev/null && echo '=== [1] Starting RPLiDAR on $LIDAR_PORT ===' && ros2 launch sllidar_ros2 sllidar_a1_launch.py serial_port:=$LIDAR_PORT serial_baudrate:=115200" C-m
 
 # ------------------------------------------------------------------------------
 # ช่องที่ 2 (บนขวา - Pane 1): SLAM Bridge (รอ 2 วินาที)
 # ------------------------------------------------------------------------------
 tmux send-keys -t "$SESSION:0.1" \
-  "source /opt/ros/jazzy/setup.bash && cd ~/EmbeddedProj/src && sleep 2 && echo '=== [2] Starting SLAM Bridge ===' && python3 slam_bridge.py" C-m
+  "source /opt/ros/jazzy/setup.bash && cd ~/EmbeddedProj/src && sleep 2 && echo '=== [2] Starting SLAM Bridge ===' && MOTION_PORT=/dev/ttyACM0 INVERT_ODOM_YAW=0 ODOM_TRACK_WIDTH_FACTOR=1.185 LIDAR_OFFSET_X=0.15 LIDAR_OFFSET_Y=0.0 SELF_FILTER_RADIUS=0.195 python3 slam_bridge.py" C-m
 
 # ------------------------------------------------------------------------------
 # ช่องที่ 3 (ล่างซ้าย - Pane 2): SLAM Toolbox (รอ 4 วินาที ให้ TF พร้อม)
 # ------------------------------------------------------------------------------
 tmux send-keys -t "$SESSION:0.2" \
-  "source /opt/ros/jazzy/setup.bash && cd ~/EmbeddedProj/src && sleep 4 && echo '=== [3] Starting SLAM Toolbox ===' && ros2 launch slam_toolbox online_async_launch.py params_file:=./slam_toolbox_config.yaml" C-m
+  "source /opt/ros/jazzy/setup.bash && cd ~/EmbeddedProj/src && sleep 4 && echo '=== [3] Starting SLAM Toolbox ===' && ros2 launch slam_toolbox online_async_launch.py slam_params_file:=./slam_toolbox_config.yaml" C-m
 
 # ------------------------------------------------------------------------------
 # ช่องที่ 4 (ล่างขวา - Pane 3): Autonomous Explorer (รอ 6 วินาที แล้วเริ่มเดินสำรวจเอง)
 # ------------------------------------------------------------------------------
 tmux send-keys -t "$SESSION:0.3" \
-  "source /opt/ros/jazzy/setup.bash && cd ~/EmbeddedProj/src && sleep 6 && echo '=== [4] Starting Auto Explorer ===' && python3 auto_explorer.py" C-m
+  "source /opt/ros/jazzy/setup.bash && cd ~/EmbeddedProj/src && sleep 6 && echo '=== [4] Starting Auto Explorer ===' && SCAN_TOPIC=/scan_filtered python3 auto_explorer.py" C-m
 
 # โฟกัสไปที่ช่อง Auto Explorer (กด Ctrl+C เพื่อหยุดได้ทุกเมื่อ)
 tmux select-pane -t "$SESSION:0.3"
