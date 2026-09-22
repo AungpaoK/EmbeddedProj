@@ -95,7 +95,8 @@ if [ "$MODE_CHOICE" == "2" ]; then
             ODOM_TRACK_WIDTH_FACTOR=1.185 \
             LIDAR_OFFSET_X=0.15 \
             LIDAR_OFFSET_Y=0.0 \
-            SELF_FILTER_RADIUS=0.22 \
+            LIDAR_YAW_OFFSET=180 \
+            SELF_FILTER_RADIUS=0.195 \
                 python3 src/slam_bridge.py > "$BRIDGE_LOG" 2>&1 &
             BRIDGE_PID=$!
             # ตรวจว่า bridge เปิด serial กับ Arduino ได้จริง ไม่ใช่แค่โปรเซสยังอยู่

@@ -52,6 +52,7 @@ class AutoExplorer(Node):
         self.emergency_dist = float(os.environ.get("EMERGENCY_DIST", "0.32"))  # เมตร: ถอยหลังทันทีถ้าประชิดเกินไป (> clearance)
         self.front_stop_dist = float(os.environ.get("FRONT_STOP_DIST", "0.45"))# เมตร: เริ่มหยุด/เลี้ยวเมื่อด้านหน้าใกล้กว่านี้
         self.side_min_dist = float(os.environ.get("SIDE_MIN_DIST", "0.28"))    # เมตร: ระยะกันชนด้านข้าง
+        self.lidar_yaw_offset = math.radians(float(os.environ.get("LIDAR_YAW_OFFSET", "0.0")))
 
         # State Machine
         self.state = ExplorerState.CRUISE
@@ -138,7 +139,7 @@ class AutoExplorer(Node):
             if math.isnan(r) or math.isinf(r) or r < self.chassis_clearance:
                 continue
 
-            angle = angle_min + i * angle_inc
+            angle = angle_min + i * angle_inc + self.lidar_yaw_offset
             # Normalize angle เป็น -pi ถึง +pi
             angle = math.atan2(math.sin(angle), math.cos(angle))
             deg = math.degrees(angle)

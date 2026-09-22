@@ -57,9 +57,7 @@ class SlamBridgeNode(Node):
         self._yaw_offset = math.radians(yaw_offset_deg)
         self._laser_x = float(os.environ.get("LIDAR_OFFSET_X", "0.15"))
         self._laser_y = float(os.environ.get("LIDAR_OFFSET_Y", "0.0"))
-        # Include the 39 cm chassis and a small allowance for protruding frame
-        # hardware so its returns do not reach SLAM or the auto-explorer.
-        self._self_filter_radius = float(os.environ.get("SELF_FILTER_RADIUS", "0.22"))
+        self._self_filter_radius = float(os.environ.get("SELF_FILTER_RADIUS", "0.195"))
         self._last_self_filter_log = 0.0
 
         # Odometry State
