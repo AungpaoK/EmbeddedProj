@@ -48,6 +48,16 @@ class AutoExplorer(Node):
         # พารามิเตอร์ความเร็วและระยะปลอดภัย (ปรับแต่งผ่าน Environment Variables ได้)
         self.cruise_speed = float(os.environ.get("CRUISE_SPEED", "0.20"))      # m/s
         self.turn_speed = float(os.environ.get("TURN_SPEED", "0.55"))          # rad/s
+        # Recovery needs more wheel torque than normal steering.  Ramp the turn
+        # speed so a loaded motor can break static friction without an abrupt
+        # command that would degrade the SLAM pose estimate.
+        self.escape_min_turn_speed = float(os.environ.get("ESCAPE_MIN_TURN_SPEED", "0.80"))
+        self.escape_max_turn_speed = float(os.environ.get("ESCAPE_MAX_TURN_SPEED", "1.20"))
+        self.escape_ramp_time = max(0.1, float(os.environ.get("ESCAPE_RAMP_TIME", "1.0")))
+        self.escape_duration = max(
+            self.escape_ramp_time,
+            float(os.environ.get("ESCAPE_DURATION", "2.0")),
+        )
         self.chassis_clearance = float(os.environ.get("CHASSIS_CLEARANCE", "0.22")) # เมตร: ตัดจุดสะท้อนเสา/โครงสร้างตัวถังด้านใน (เสาอยู่ที่ ~0.17m)
         self.emergency_dist = float(os.environ.get("EMERGENCY_DIST", "0.32"))  # เมตร: ถอยหลังทันทีถ้าประชิดเกินไป (> clearance)
         self.front_stop_dist = float(os.environ.get("FRONT_STOP_DIST", "0.45"))# เมตร: เริ่มหยุด/เลี้ยวเมื่อด้านหน้าใกล้กว่านี้
@@ -56,8 +66,9 @@ class AutoExplorer(Node):
 
         # State Machine
         self.state = ExplorerState.CRUISE
+        self.escape_start_time = 0.0
         self.escape_end_time = 0.0
-        self.escape_turn_speed = 0.0
+        self.escape_turn_direction = 0.0
         self.rotate_end_time = 0.0
 
         # Odometry Progress Watchdog (ตรวจจับกรณีหุ่นยนต์ติดขัด)
@@ -102,7 +113,9 @@ class AutoExplorer(Node):
         logger.info(
             f"Auto Explorer initialized: Clearance={self.chassis_clearance:.2f}m, "
             f"Emergency={self.emergency_dist:.2f}m, Stop={self.front_stop_dist:.2f}m, "
-            f"Cruise={self.cruise_speed:.2f}m/s, Scan={self.scan_topic}"
+            f"Cruise={self.cruise_speed:.2f}m/s, "
+            f"Escape={self.escape_min_turn_speed:.2f}-{self.escape_max_turn_speed:.2f}rad/s, "
+            f"Scan={self.scan_topic}"
         )
 
     def _odom_callback(self, msg: Odometry):
@@ -186,9 +199,16 @@ class AutoExplorer(Node):
     def _start_escape(self, now: float):
         """Rotate toward the clearer side, keeping the robot's forward axis convention."""
         self.state = ExplorerState.ESCAPE
-        turn_dir = 1.0 if self.left_dist > self.right_dist else -1.0
-        self.escape_turn_speed = turn_dir * self.turn_speed
-        self.escape_end_time = now + 2.2
+        self.escape_turn_direction = 1.0 if self.left_dist > self.right_dist else -1.0
+        self.escape_start_time = now
+        self.escape_end_time = now + self.escape_duration
+        logger.info(
+            "Escape turn: ramping %.2f -> %.2f rad/s for %.1fs toward %s",
+            self.escape_min_turn_speed,
+            self.escape_max_turn_speed,
+            self.escape_duration,
+            "left" if self.escape_turn_direction > 0.0 else "right",
+        )
 
     def _control_loop(self):
         now_monotonic = time.monotonic()
@@ -238,7 +258,11 @@ class AutoExplorer(Node):
             # linear.x, matching the forward command from teleop key 'i'.
             if now < self.escape_end_time:
                 cmd.linear.x = 0.0
-                cmd.angular.z = self.escape_turn_speed
+                ramp_ratio = min(1.0, (now - self.escape_start_time) / self.escape_ramp_time)
+                escape_speed = self.escape_min_turn_speed + ramp_ratio * (
+                    self.escape_max_turn_speed - self.escape_min_turn_speed
+                )
+                cmd.angular.z = self.escape_turn_direction * escape_speed
             else:
                 self.state = ExplorerState.CRUISE
                 self.last_progress_time = now

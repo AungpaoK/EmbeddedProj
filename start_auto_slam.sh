@@ -57,7 +57,7 @@ tmux send-keys -t "$SESSION:0.2" \
 # ช่องที่ 4 (ล่างขวา - Pane 3): Autonomous Explorer (รอ 6 วินาที แล้วเริ่มเดินสำรวจเอง)
 # ------------------------------------------------------------------------------
 tmux send-keys -t "$SESSION:0.3" \
-  "source /opt/ros/jazzy/setup.bash && cd ~/EmbeddedProj/src && sleep 6 && echo '=== [4] Starting Auto Explorer ===' && LIDAR_YAW_OFFSET=180 SCAN_TOPIC=/scan_filtered python3 auto_explorer.py" C-m
+  "source /opt/ros/jazzy/setup.bash && cd ~/EmbeddedProj/src && sleep 6 && echo '=== [4] Starting Auto Explorer ===' && LIDAR_YAW_OFFSET=180 SCAN_TOPIC=/scan_filtered ESCAPE_MIN_TURN_SPEED=0.80 ESCAPE_MAX_TURN_SPEED=1.20 ESCAPE_RAMP_TIME=1.0 ESCAPE_DURATION=2.0 python3 auto_explorer.py" C-m
 
 # โฟกัสไปที่ช่อง Auto Explorer (กด Ctrl+C เพื่อหยุดได้ทุกเมื่อ)
 tmux select-pane -t "$SESSION:0.3"
