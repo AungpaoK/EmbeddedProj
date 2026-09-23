@@ -36,10 +36,11 @@ repository path in deploy/food-delivery-pos.user.service.example, then run:
 The service launches deploy/run_pos_controller.sh, which sources the ROS 2
 Jazzy setup and the default workspace at ~/ros2_ws/install when present. Set
 ROS_SETUP or ROS_WS_SETUP in the unit if those setup files are elsewhere. The
-desktop entry waits up to 90 seconds for the local health endpoint before
-launching a browser in kiosk mode. The launcher checks for chromium,
-chromium-browser, then Firefox. If the executable has a different name, set
-POS_BROWSER near the top of deploy/pos_kiosk.sh.
+desktop entry starts deploy/start_pos_kiosk.sh after a short delay. It guards
+against duplicate launches, logs to /tmp/pos_kiosk_autostart.log, waits for the
+local health endpoint, and restarts the kiosk if the browser exits. The browser
+launcher checks for chromium, chromium-browser, then Firefox. If the executable
+has a different name, set POS_BROWSER near the top of deploy/pos_kiosk.sh.
 
 Ubuntu must be configured to automatically log in to the kiosk account so its
 user service and desktop autostart run after boot. The account needs access to
