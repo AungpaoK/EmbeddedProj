@@ -48,6 +48,16 @@ const float ACCEL_STEP_MPS    = 0.005;
 const float DECEL_DIST_METERS = 0.20;
 const float MIN_DRIVE_SPEED   = 0.04;   // ความเร็วขั้นต่ำเพื่อไม่ให้มอเตอร์ฝืด
 
+// Automatic breakaway assist: if a wheel receives a real speed target but
+// produces no encoder ticks, add bounded PWM in small steps. This handles
+// static friction without running a stalled motor at full power indefinitely.
+const float STALL_MIN_TARGET_MPS          = 0.05f;
+const unsigned long STALL_DETECT_MS       = 350;
+const unsigned long STALL_PWM_STEP_MS     = 250;
+const unsigned long STALL_ABORT_MS        = 3000;
+const int STALL_PWM_STEP                 = 20;
+const int STALL_PWM_MAX_BOOST            = 120;
+
 float K_sync = 1.5;   // Cross-coupling Sync Gain
 
 // ============================================================
@@ -62,11 +72,21 @@ struct PIDController {
     float lastSpeed     = 0.0;
     float actualSpeed   = 0.0;
     long  prevTicks     = 0;
+    unsigned long lastEncoderMotionMs = 0;
+    unsigned long lastStallBoostMs = 0;
+    int stallBoostPwm = 0;
+    int lastTargetSign = 0;
+    bool stallFault = false;
 
     void reset() {
         errorSum    = 0.0;
         lastSpeed   = 0.0;
         actualSpeed = 0.0;
+        lastEncoderMotionMs = millis();
+        lastStallBoostMs = lastEncoderMotionMs;
+        stallBoostPwm = 0;
+        lastTargetSign = 0;
+        stallFault = false;
     }
 
     float compute(long currentTicks, float targetMPS, float dt) {
@@ -88,6 +108,52 @@ struct PIDController {
         if (abs(targetMPS) > 0.01f && abs(out) < 35.0f) {
             out = (targetMPS > 0) ? 35.0f : -35.0f;
         }
+
+        unsigned long nowMs = millis();
+        int targetSign = (targetMPS > STALL_MIN_TARGET_MPS) ? 1 :
+                         (targetMPS < -STALL_MIN_TARGET_MPS) ? -1 : 0;
+
+        if (targetSign == 0) {
+            lastTargetSign = 0;
+            lastEncoderMotionMs = nowMs;
+            lastStallBoostMs = nowMs;
+            stallBoostPwm = 0;
+        } else {
+            // A new direction starts a fresh breakaway attempt. Do not count
+            // encoder movement from the previous direction as progress.
+            if (targetSign != lastTargetSign) {
+                lastTargetSign = targetSign;
+                lastEncoderMotionMs = nowMs;
+                lastStallBoostMs = nowMs;
+                stallBoostPwm = 0;
+            }
+
+            if (delta != 0) {
+                // Encoder movement is the feedback that the motor broke free.
+                lastEncoderMotionMs = nowMs;
+                lastStallBoostMs = nowMs;
+                stallBoostPwm = 0;
+            } else {
+                unsigned long noMotionMs = nowMs - lastEncoderMotionMs;
+                if (noMotionMs >= STALL_DETECT_MS &&
+                    nowMs - lastStallBoostMs >= STALL_PWM_STEP_MS) {
+                    stallBoostPwm = min(stallBoostPwm + STALL_PWM_STEP,
+                                        STALL_PWM_MAX_BOOST);
+                    lastStallBoostMs = nowMs;
+                }
+                if (noMotionMs >= STALL_ABORT_MS) {
+                    stallFault = true;
+                }
+            }
+
+            // Add boost only while the PID is asking in the target direction;
+            // never fight the controller when it is braking or correcting overspeed.
+            if (stallBoostPwm > 0 && out * targetMPS > 0.0f) {
+                out += targetSign * stallBoostPwm;
+            }
+        }
+
+        out = constrain(out, -255.0f, 255.0f);
         return out;
     }
 };
@@ -114,6 +180,7 @@ const unsigned long VELOCITY_TIMEOUT_MS = 300;  // ตัดมอเตอร�
 
 unsigned long lastControlTime  = 0;
 unsigned long lastEncoderPrint = 0;
+bool motionFaultLatched = false;
 
 // ============================================================
 // Encoder ISR (PCINT1 — Port C)
@@ -191,8 +258,24 @@ void beginCommand(MotionCommand cmd, float target) {
     rampedSpeed = 0.0;
     pidLeft.reset();
     pidRight.reset();
+    pidLeft.prevTicks = startLeftTicks;
+    pidRight.prevTicks = startRightTicks;
     currentCmd = cmd;
     cmdTarget  = target;
+}
+
+void stopForEncoderStall() {
+    if (motionFaultLatched) return;
+    driveMotors(0, 0);
+    currentCmd = CMD_IDLE;
+    targetLeftSpeed = 0.0f;
+    targetRightSpeed = 0.0f;
+    motionFaultLatched = true;
+    Serial.println("STATUS:STALL");
+}
+
+bool encoderStallDetected() {
+    return pidLeft.stallFault || pidRight.stallFault;
 }
 
 // ============================================================
@@ -202,7 +285,17 @@ void parseSerialCommand(const String &line) {
     if (line == "STOP") {
         driveMotors(0, 0);
         currentCmd = CMD_IDLE;
+        targetLeftSpeed = 0.0f;
+        targetRightSpeed = 0.0f;
+        motionFaultLatched = false;
+        pidLeft.reset();
+        pidRight.reset();
         Serial.println("STATUS:DONE");
+        return;
+    }
+
+    if (motionFaultLatched && !line.startsWith("V:")) {
+        Serial.println("STATUS:STALL");
         return;
     }
 
@@ -226,8 +319,34 @@ void parseSerialCommand(const String &line) {
     if (line.startsWith("V:")) {
         int commaIdx = line.indexOf(',');
         if (commaIdx > 2) {
-            targetLeftSpeed     = line.substring(2, commaIdx).toFloat();
-            targetRightSpeed    = line.substring(commaIdx + 1).toFloat();
+            float nextLeftSpeed  = line.substring(2, commaIdx).toFloat();
+            float nextRightSpeed = line.substring(commaIdx + 1).toFloat();
+
+            if (abs(nextLeftSpeed) < 0.005f && abs(nextRightSpeed) < 0.005f) {
+                driveMotors(0, 0);
+                targetLeftSpeed = 0.0f;
+                targetRightSpeed = 0.0f;
+                currentCmd = CMD_IDLE;
+                motionFaultLatched = false;
+                pidLeft.reset();
+                pidRight.reset();
+                return;
+            }
+
+            // Once a no-motion fault cuts drive power, ignore further nonzero
+            // velocity updates until the host sends a zero command or STOP.
+            if (motionFaultLatched) return;
+
+            if (currentCmd != CMD_VELOCITY) {
+                long leftTicks, rightTicks;
+                readTicks(leftTicks, rightTicks);
+                pidLeft.reset();
+                pidRight.reset();
+                pidLeft.prevTicks = leftTicks;
+                pidRight.prevTicks = rightTicks;
+            }
+            targetLeftSpeed     = nextLeftSpeed;
+            targetRightSpeed    = nextRightSpeed;
             currentCmd          = CMD_VELOCITY;
             lastVelocityCmdTime = millis();
             return;
@@ -277,6 +396,11 @@ void executeForward(float dt) {
     float pwmL = pidLeft.compute(leftTicks,  rampedSpeed - sync, dt);
     float pwmR = pidRight.compute(rightTicks, rampedSpeed + sync, dt);
 
+    if (encoderStallDetected()) {
+        stopForEncoderStall();
+        return;
+    }
+
     driveMotors((int)pwmL, (int)pwmR);
 }
 
@@ -303,6 +427,11 @@ void executeTurn(float dt) {
     float pwmL = pidLeft.compute(leftTicks,  -TURN_SPEED_MPS * dirSign, dt);
     float pwmR = pidRight.compute(rightTicks, TURN_SPEED_MPS * dirSign, dt);
 
+    if (encoderStallDetected()) {
+        stopForEncoderStall();
+        return;
+    }
+
     driveMotors((int)pwmL, (int)pwmR);
 }
 
@@ -321,6 +450,11 @@ void executeVelocity(float dt) {
 
     float pwmL = pidLeft.compute(leftTicks,  targetLeftSpeed, dt);
     float pwmR = pidRight.compute(rightTicks, targetRightSpeed, dt);
+
+    if (encoderStallDetected()) {
+        stopForEncoderStall();
+        return;
+    }
 
     driveMotors((int)pwmL, (int)pwmR);
 }

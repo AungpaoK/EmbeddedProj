@@ -246,6 +246,8 @@ class SlamBridgeNode(Node):
                 else:
                     # Expose STATUS lines or a different firmware's output instead of
                     # silently discarding it; this distinguishes wrong protocol from no RX.
+                    if line == "STATUS:STALL":
+                        logger.error("Arduino cut motor power: encoder stall persisted after bounded PWM ramp")
                     logger.info("Arduino serial RX (non-ENCODER): %r", line[:160])
             except Exception as exc:
                 now = time.monotonic()
