@@ -34,7 +34,18 @@ fi
 
 case "$(basename "$BROWSER")" in
     firefox|firefox-esr)
-        exec "$BROWSER" --kiosk "$POS_URL"
+        if [[ -n "${POS_FIREFOX_PROFILE:-}" ]]; then
+            FIREFOX_PROFILE="$POS_FIREFOX_PROFILE"
+        elif [[ -d "$HOME/snap/firefox/common" ]]; then
+            FIREFOX_PROFILE="$HOME/snap/firefox/common/pos-kiosk-profile"
+        else
+            FIREFOX_PROFILE="${XDG_DATA_HOME:-$HOME/.local/share}/food-delivery-pos/firefox-profile"
+        fi
+        mkdir -p "$FIREFOX_PROFILE"
+        if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
+            export MOZ_ENABLE_WAYLAND="${MOZ_ENABLE_WAYLAND:-1}"
+        fi
+        exec "$BROWSER" --no-remote --profile "$FIREFOX_PROFILE" --new-window "$POS_URL"
         ;;
     *)
         exec "$BROWSER" \

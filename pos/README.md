@@ -38,8 +38,11 @@ Jazzy setup and the default workspace at ~/ros2_ws/install when present. Set
 ROS_SETUP or ROS_WS_SETUP in the unit if those setup files are elsewhere. The
 desktop entry starts deploy/start_pos_kiosk.sh after a short delay. It guards
 against duplicate launches, logs to /tmp/pos_kiosk_autostart.log, waits for the
-local health endpoint, and restarts the kiosk if the browser exits. The browser
-launcher checks for chromium, chromium-browser, then Firefox. If the executable
+local health endpoint, and restarts the browser if it exits. The browser
+launcher checks for chromium, chromium-browser, then Firefox. Chromium runs in
+kiosk mode. Firefox uses a separate POS profile and opens a new window; on the
+Ubuntu Pi's Snap Firefox, kiosk mode stayed alive but did not navigate to the
+local POS URL, while a normal window loaded it successfully. If the executable
 has a different name, set POS_BROWSER near the top of deploy/pos_kiosk.sh.
 
 Ubuntu must be configured to automatically log in to the kiosk account so its
