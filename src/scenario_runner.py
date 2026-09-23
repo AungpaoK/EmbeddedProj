@@ -20,7 +20,7 @@ import math
 import time
 import argparse
 import threading
-from typing import List, Tuple
+from typing import List
 
 try:
     import rclpy
@@ -363,15 +363,17 @@ class ScenarioRunnerNode(Node):
     # การควบคุมการเคลื่อนที่ตาม Waypoints (docs/scenario.md)
     # ------------------------------------------------------------------
     def drive_forward(self, distance: float, speed: float = 0.22) -> bool:
-        """สั่งวิ่งตรงตามระยะทางที่กำหนด พร้อมระบบตรวจจับ Stall และ Timeout Watchdog"""
+        """Drive a measured distance while correcting yaw drift from odometry."""
         print(f"  ⬆️ [Motion] เดินหน้า {distance:.2f} เมตร (ความเร็ว {speed:.2f} m/s)...")
         last_x, last_y = self.x, self.y
+        target_heading = self.theta
         traveled = 0.0
 
         max_duration = (distance / max(speed, 0.05)) * 2.5 + 5.0
         start_time = time.time()
         last_progress_time = time.time()
         last_traveled = 0.0
+        last_heading_log_time = 0.0
         success = False
 
         while rclpy.ok() and traveled < distance:
@@ -387,12 +389,30 @@ class ScenarioRunnerNode(Node):
                 print("  ⚠️ [Warning] ไม่พบการเปลี่ยนแปลงตำแหน่งจาก /odom เกิน 4 วินาที! มอเตอร์อาจติดขัดหรือเซนเซอร์ไม่ทำงาน")
                 last_progress_time = now_t
 
+            # Hold the heading present at the start of this straight segment.
+            # Positive correction is ROS/odom CCW; compensate for the bridge's
+            # INVERT_STEER setting when publishing the real-robot command.
+            heading_error = self._wrap_angle(target_heading - self.theta)
+            correction = 0.0
+            if abs(heading_error) > math.radians(1.0):
+                correction = max(-0.5, min(0.5, 1.8 * heading_error))
+                if abs(correction) < 0.12:
+                    correction = math.copysign(0.12, correction)
+
             self.target_v = speed
-            self.target_w = 0.0
+            self.target_w = correction
             if self.mode == "robot":
                 cmd = Twist()
                 cmd.linear.x = speed
+                cmd.angular.z = -correction
                 self.cmd_pub.publish(cmd)
+
+            if abs(heading_error) > math.radians(5.0) and now_t - last_heading_log_time > 1.0:
+                print(
+                    f"  ↪️ [Heading Hold] เบน {math.degrees(heading_error):+.1f}° "
+                    f"กำลังชดเชยทิศทาง"
+                )
+                last_heading_log_time = now_t
             time.sleep(0.05)
 
             step_dist = math.hypot(self.x - last_x, self.y - last_y)
@@ -400,7 +420,7 @@ class ScenarioRunnerNode(Node):
             last_x, last_y = self.x, self.y
 
         self.stop_robot()
-        if traveled >= distance * 0.85:
+        if traveled >= max(0.0, distance - ARRIVAL_TOLERANCE_M):
             success = True
             print(f"  ✓ [Motion] เดินหน้าสำเร็จ รวมระยะ {traveled:.2f}m (ตำแหน่งปัจจุบัน: X={self.x:.2f}, Y={self.y:.2f})")
         else:
@@ -474,69 +494,6 @@ class ScenarioRunnerNode(Node):
     def _wrap_angle(angle: float) -> float:
         return math.atan2(math.sin(angle), math.cos(angle))
 
-    def drive_to_point(
-        self,
-        target_x: float,
-        target_y: float,
-        speed: float = 0.18,
-        tolerance: float = ARRIVAL_TOLERANCE_M,
-        max_corrections: int = 4,
-    ) -> bool:
-        """Drive to an absolute odom point, correcting heading and residual distance."""
-        for attempt in range(max_corrections + 1):
-            dx = target_x - self.x
-            dy = target_y - self.y
-            remaining = math.hypot(dx, dy)
-            if remaining <= tolerance:
-                print(
-                    f"  ✓ [Waypoint] ถึงเป้าหมายคลาด {remaining:.2f}m "
-                    f"(X={self.x:.2f}, Y={self.y:.2f})"
-                )
-                return True
-
-            desired_heading = math.atan2(dy, dx)
-            heading_error = self._wrap_angle(desired_heading - self.theta)
-            print(
-                f"  🎯 [Waypoint] เป้าหมาย (X={target_x:.2f}, Y={target_y:.2f}), "
-                f"เหลือ {remaining:.2f}m, ปรับรอบ {attempt + 1}/{max_corrections + 1}"
-            )
-
-            if abs(heading_error) > math.radians(3.0):
-                if not self.turn_degrees(math.degrees(heading_error), speed=0.35):
-                    print("  ⚠️ [Waypoint] ปรับทิศทางไม่สำเร็จ")
-                    return False
-
-            dx = target_x - self.x
-            dy = target_y - self.y
-            remaining = math.hypot(dx, dy)
-            if remaining <= tolerance:
-                continue
-
-            before_x, before_y = self.x, self.y
-            if not self.drive_forward(remaining, speed=speed):
-                return False
-
-            moved = math.hypot(self.x - before_x, self.y - before_y)
-            if moved < 0.01 and math.hypot(target_x - self.x, target_y - self.y) > tolerance:
-                print("  ⚠️ [Waypoint] odometry ไม่ขยับ จึงหยุดการแก้ตำแหน่ง")
-                return False
-
-        remaining = math.hypot(target_x - self.x, target_y - self.y)
-        print(f"  ⚠️ [Waypoint] ไปไม่ถึงเป้าหมาย เหลือ {remaining:.2f}m")
-        return remaining <= tolerance
-
-    def _mission_waypoint(self, forward: float, lateral: float = 0.0) -> Tuple[float, float]:
-        """Convert a restaurant waypoint into odom coordinates relative to mission start."""
-        start_x, start_y, start_heading = self.start_pose
-        forward_x = math.cos(start_heading)
-        forward_y = math.sin(start_heading)
-        left_x = -forward_y
-        left_y = forward_x
-        return (
-            start_x + forward * forward_x + lateral * left_x,
-            start_y + forward * forward_y + lateral * left_y,
-        )
-
     def stop_robot(self):
         """หยุดหุ่นยนต์และตัดกำลังขับเคลื่อน"""
         self.target_v = 0.0
@@ -603,41 +560,38 @@ class ScenarioRunnerNode(Node):
         print("1. วางอาหารชั้น 1 กำหนดส่ง Table 1 -> กดยืนยันการออกส่ง (#)")
         time.sleep(1.0)
 
-        junction_x, junction_y = self._mission_waypoint(JUNCTION_X)
-        table_x, table_y = self._mission_waypoint(JUNCTION_X, TABLE1_Y)
-        start_x, start_y, _ = self.start_pose
-
-        # 1. ไปยัง Junction จาก pose เริ่มจริง
-        print(f"\n[Step 1/6] มุ่งหน้าสู่ Junction เป้าหมาย ({junction_x:.2f}, {junction_y:.2f})...")
-        if not self.drive_to_point(junction_x, junction_y):
+        # Fixed sequence: kitchen -> junction -> table -> junction -> kitchen.
+        print(f"\n[Step 1/5] เดินตรงไปยัง Junction {JUNCTION_X:.2f}m...")
+        if not self.drive_forward(JUNCTION_X):
             print("  ⚠️ [Safety Abort] การเดินหน้าขัดข้อง ยกเลิกขั้นตอนถัดไปเพื่อความปลอดภัย!")
             return
 
-        # 2. ไปยัง Table 1
-        print(f"\n[Step 2/6] มุ่งหน้าสู่ Table 1 เป้าหมาย ({table_x:.2f}, {table_y:.2f})...")
-        if not self.drive_to_point(table_x, table_y):
+        print("\n[Step 2/5] หมุนเข้าหาโต๊ะ 1...")
+        if not self.turn_degrees(+90.0):
+            print("  ⚠️ [Safety Abort] หมุนเข้าหาโต๊ะไม่สำเร็จ")
+            return
+
+        print(f"\n[Step 3/5] เดินตรงไปที่โต๊ะ {TABLE1_Y:.2f}m...")
+        if not self.drive_forward(TABLE1_Y):
             print("  ⚠️ [Safety Abort] การเข้าเทียบโต๊ะขัดข้อง ยกเลิกขั้นตอนถัดไปเพื่อความปลอดภัย!")
             return
 
-        # 4. รอลูกค้าหยิบอาหาร
         self.wait_customer_pickup("Table 1", wait_sec=3.5)
 
-        # 3. กลับผ่าน Junction โดยคำนวณจาก odometry ปัจจุบัน
-        print(f"[Step 3/6] กลับมายัง Junction ({junction_x:.2f}, {junction_y:.2f})...")
-        if not self.drive_to_point(junction_x, junction_y):
+        print("[Step 4/5] หมุนกลับ แล้วเดินตรงกลับมายัง Junction...")
+        if not self.turn_degrees(+180.0):
+            print("  ⚠️ [Safety Abort] หมุนกลับจากโต๊ะไม่สำเร็จ")
+            return
+        if not self.drive_forward(TABLE1_Y):
             print("  ⚠️ [Safety Abort] การวิ่งกลับทางแยกขัดข้อง ยกเลิกขั้นตอนถัดไปเพื่อความปลอดภัย!")
             return
 
-        # 4. เล็งกลับไปยัง pose เริ่มจริง แทนการเล่นระยะเดิมซ้ำ
-        print(f"[Step 4/6] กลับจุดเริ่มภารกิจ ({start_x:.2f}, {start_y:.2f})...")
-        if not self.drive_to_point(start_x, start_y):
-            print("  ⚠️ [Safety Abort] การวิ่งเข้าครัวขัดข้อง!")
+        print("[Step 5/5] หมุนเข้าหาครัว แล้วเดินตรงกลับจุดเริ่ม...")
+        if not self.turn_degrees(-90.0):
+            print("  ⚠️ [Safety Abort] หมุนเข้าหาครัวไม่สำเร็จ")
             return
-
-        # 5. หมุน 180° หันหน้าออกพร้อมรับงานใหม่ (ตำแหน่งไม่เปลี่ยน)
-        print("หมุนตัว 180° จอดเทียบท่าหันหน้าออก...")
-        if not self.turn_degrees(+180.0):
-            print("  ⚠️ [Safety Abort] ถึงจุดเริ่มแล้ว แต่จัดแนวหุ่นยนต์ไม่สำเร็จ")
+        if not self.drive_forward(JUNCTION_X):
+            print("  ⚠️ [Safety Abort] การเดินกลับครัวขัดข้อง!")
             return
 
         print("\n" + "=" * 60)
@@ -650,29 +604,27 @@ class ScenarioRunnerNode(Node):
         print("1. ชั้น 1: Table 1 | ชั้น 2: Table 2 -> กดยืนยัน (#)")
         time.sleep(1.0)
 
-        junction_x, junction_y = self._mission_waypoint(JUNCTION_X)
-        table1_x, table1_y = self._mission_waypoint(JUNCTION_X, TABLE1_Y)
-        table2_x, table2_y = self._mission_waypoint(JUNCTION_X, -TABLE2_Y)
-        start_x, start_y, _ = self.start_pose
-
         # --- Deliver Table 1 ---
         print("\n>>> ส่งโต๊ะที่ 1 (Table 1) <<<")
-        if not self.drive_to_point(junction_x, junction_y): return
-        if not self.drive_to_point(table1_x, table1_y): return
+        if not self.drive_forward(JUNCTION_X): return
+        if not self.turn_degrees(+90.0): return
+        if not self.drive_forward(TABLE1_Y): return
         self.wait_customer_pickup("Table 1 (ชั้น 1)", wait_sec=3.0)
 
         # --- Deliver Table 2 ---
         print("\n>>> เดินทางไปส่งโต๊ะที่ 2 (Table 2) <<<")
-        if not self.drive_to_point(junction_x, junction_y): return
-        if not self.drive_to_point(table2_x, table2_y): return
+        if not self.turn_degrees(+180.0): return
+        if not self.drive_forward(TABLE1_Y): return
+        if not self.drive_forward(TABLE2_Y): return
         self.wait_customer_pickup("Table 2 (ชั้น 2)", wait_sec=3.0)
 
         # --- Return to Kitchen ---
         print("\n>>> ส่งครบทั้ง 2 โต๊ะแล้ว เดินทางกลับครัว <<<")
-        if not self.drive_to_point(junction_x, junction_y): return
-        if not self.drive_to_point(start_x, start_y): return
-        print("หมุนตัว 180° จอดเทียบท่าหันหน้าออก...")
         if not self.turn_degrees(+180.0): return
+        if not self.drive_forward(TABLE2_Y): return
+        if not self.drive_forward(TABLE1_Y): return
+        if not self.turn_degrees(+90.0): return
+        if not self.drive_forward(JUNCTION_X): return
 
         print("\n" + "=" * 60)
         print("  🎉 [SCENARIO 2 COMPLETED] เสิร์ฟครบ 2 โต๊ะ และเดินทางกลับครัวเรียบร้อย!")
