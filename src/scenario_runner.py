@@ -20,7 +20,7 @@ import math
 import time
 import argparse
 import threading
-from typing import List
+from typing import List, Optional
 
 try:
     import rclpy
@@ -362,11 +362,18 @@ class ScenarioRunnerNode(Node):
     # ------------------------------------------------------------------
     # การควบคุมการเคลื่อนที่ตาม Waypoints (docs/scenario.md)
     # ------------------------------------------------------------------
-    def drive_forward(self, distance: float, speed: float = 0.22) -> bool:
+    def drive_forward(
+        self,
+        distance: float,
+        speed: float = 0.22,
+        target_heading: Optional[float] = None,
+    ) -> bool:
         """Drive a measured distance while correcting yaw drift from odometry."""
         print(f"  ⬆️ [Motion] เดินหน้า {distance:.2f} เมตร (ความเร็ว {speed:.2f} m/s)...")
         last_x, last_y = self.x, self.y
-        target_heading = self.theta
+        if target_heading is None:
+            target_heading = self.theta
+        target_heading = self._wrap_angle(target_heading)
         traveled = 0.0
 
         max_duration = (distance / max(speed, 0.05)) * 2.5 + 5.0
@@ -428,21 +435,32 @@ class ScenarioRunnerNode(Node):
         return success
 
     def turn_degrees(self, degrees: float, speed: float = 0.75) -> bool:
-        """หมุนหุ่นยนต์ไปยังเป้าหมายมุม (Closed-loop Heading Control ตาม Odom Yaw)"""
-        direction = "ซ้าย (CCW)" if degrees > 0 else "ขวา (CW)"
-        target_theta = self.theta + math.radians(degrees)
-        while target_theta > math.pi:
-            target_theta -= 2.0 * math.pi
-        while target_theta < -math.pi:
-            target_theta += 2.0 * math.pi
+        """Turn by a relative angle, retaining the closed-loop odometry check."""
+        return self.turn_to_heading(self.theta + math.radians(degrees), speed=speed)
 
-        print(f"  🔄 [Motion] หมุน{direction} {abs(degrees):.1f}° (เป้าหมาย Yaw: {math.degrees(target_theta):.1f}°)...")
+    def turn_to_heading(
+        self,
+        target_heading: float,
+        speed: float = 0.75,
+        tolerance_degrees: float = 2.5,
+    ) -> bool:
+        """Turn in place to an absolute odom heading, easing speed near target."""
+        target_theta = self._wrap_angle(target_heading)
+        initial_error = self._wrap_angle(target_theta - self.theta)
+        direction = "ซ้าย (CCW)" if initial_error >= 0.0 else "ขวา (CW)"
+        print(
+            f"  🔄 [Motion] หมุน{direction} ไป heading "
+            f"{math.degrees(target_theta):.1f}° ที่ความเร็วสูงสุด {speed:.2f} rad/s..."
+        )
 
-        max_duration = (math.radians(abs(degrees)) / max(speed, 0.1)) * 2.5 + 6.0
+        max_duration = (abs(initial_error) / max(speed, 0.1)) * 3.0 + 6.0
         start_time = time.time()
         last_progress_time = time.time()
         last_err = 999.0
         success = False
+        tolerance = math.radians(tolerance_degrees)
+        slowdown_range = math.radians(45.0)
+        minimum_turn_speed = min(speed, 0.60)
 
         while rclpy.ok():
             now_t = time.time()
@@ -451,15 +469,24 @@ class ScenarioRunnerNode(Node):
                 break
 
             # คำนวณ error ของมุมในรอบ [-pi, +pi]
-            err = target_theta - self.theta
-            while err > math.pi:
-                err -= 2.0 * math.pi
-            while err < -math.pi:
-                err += 2.0 * math.pi
+            err = self._wrap_angle(target_theta - self.theta)
 
-            if abs(err) < math.radians(5.0):  # ถึงเป้าหมายภายใน ±5°
-                success = True
-                break
+            if abs(err) <= tolerance:
+                # Let encoder updates catch any small coast after zero velocity,
+                # then verify the final heading before allowing the next leg.
+                self.stop_robot()
+                time.sleep(0.15)
+                settled_err = self._wrap_angle(target_theta - self.theta)
+                if abs(settled_err) <= tolerance:
+                    success = True
+                    break
+                print(
+                    f"  ↪️ [Turn settle] หลังหยุดยังคลาด "
+                    f"{math.degrees(settled_err):+.1f}° กำลังปรับซ้ำ"
+                )
+                last_err = 999.0
+                last_progress_time = time.time()
+                continue
 
             # Stall check: เช็คว่า error ขยับลดลงหรือไม่
             if abs(err - last_err) > math.radians(1.5):
@@ -469,8 +496,19 @@ class ScenarioRunnerNode(Node):
                 print("  ⚠️ [Warning] ไม่พบการหมุนจาก /odom เกิน 4 วินาที! มอเตอร์อาจติดขัด")
                 last_progress_time = now_t
 
-            # สั่งความเร็วเชิงมุมตามเครื่องหมายของ error
-            turn_w = math.copysign(speed, err)
+            # Keep the tank-turn wheel targets strong enough to break away,
+            # but ease down from max speed over the final 45 degrees.
+            remaining = abs(err)
+            if remaining >= slowdown_range:
+                turn_speed = speed
+            else:
+                progress = max(
+                    0.0,
+                    min(1.0, (remaining - tolerance) / (slowdown_range - tolerance)),
+                )
+                turn_speed = minimum_turn_speed + (speed - minimum_turn_speed) * progress
+
+            turn_w = math.copysign(turn_speed, err)
             self.target_v = 0.0
             self.target_w = turn_w
             if self.mode == "robot":
@@ -563,42 +601,54 @@ class ScenarioRunnerNode(Node):
         print("1. วางอาหารชั้น 1 กำหนดส่ง Table 1 -> กดยืนยันการออกส่ง (#)")
         time.sleep(1.0)
 
+        start_heading = self.start_pose[2]
+        heading_out = self._wrap_angle(start_heading)
+        heading_table = self._wrap_angle(start_heading + math.pi / 2.0)
+        heading_return = self._wrap_angle(start_heading - math.pi / 2.0)
+        heading_kitchen = self._wrap_angle(start_heading + math.pi)
+
         # Fixed sequence: kitchen -> junction -> table -> junction -> kitchen.
         print(f"\n[Step 1/5] เดินตรงไปยัง Junction {JUNCTION_X:.2f}m...")
-        if not self.drive_forward(JUNCTION_X):
+        if not self.drive_forward(JUNCTION_X, target_heading=heading_out):
             print("  ⚠️ [Safety Abort] การเดินหน้าขัดข้อง ยกเลิกขั้นตอนถัดไปเพื่อความปลอดภัย!")
             return
 
         print("\n[Step 2/5] หมุนเข้าหาโต๊ะ 1...")
-        if not self.turn_degrees(+90.0):
+        if not self.turn_to_heading(heading_table):
             print("  ⚠️ [Safety Abort] หมุนเข้าหาโต๊ะไม่สำเร็จ")
             return
 
         print(f"\n[Step 3/5] เดินตรงไปที่โต๊ะ {TABLE1_Y:.2f}m...")
-        if not self.drive_forward(TABLE1_Y):
+        if not self.drive_forward(TABLE1_Y, target_heading=heading_table):
             print("  ⚠️ [Safety Abort] การเข้าเทียบโต๊ะขัดข้อง ยกเลิกขั้นตอนถัดไปเพื่อความปลอดภัย!")
             return
 
         self.wait_customer_pickup("Table 1", wait_sec=3.5)
 
         print("[Step 4/5] หมุนกลับ แล้วเดินตรงกลับมายัง Junction...")
-        if not self.turn_degrees(+180.0):
+        if not self.turn_to_heading(heading_return):
             print("  ⚠️ [Safety Abort] หมุนกลับจากโต๊ะไม่สำเร็จ")
             return
-        if not self.drive_forward(TABLE1_Y):
+        if not self.drive_forward(TABLE1_Y, target_heading=heading_return):
             print("  ⚠️ [Safety Abort] การวิ่งกลับทางแยกขัดข้อง ยกเลิกขั้นตอนถัดไปเพื่อความปลอดภัย!")
             return
 
         print("[Step 5/5] หมุนเข้าหาครัว แล้วเดินตรงกลับจุดเริ่ม...")
-        if not self.turn_degrees(-90.0):
+        if not self.turn_to_heading(heading_kitchen):
             print("  ⚠️ [Safety Abort] หมุนเข้าหาครัวไม่สำเร็จ")
             return
-        if not self.drive_forward(JUNCTION_X):
+        if not self.drive_forward(JUNCTION_X, target_heading=heading_kitchen):
             print("  ⚠️ [Safety Abort] การเดินกลับครัวขัดข้อง!")
             return
 
         print("\n" + "=" * 60)
-        print("  🎉 [SCENARIO 1 COMPLETED] ส่งอาหารโต๊ะ 1 สำเร็จ จอดพร้อมรับงานรอบใหม่!")
+        start_x, start_y, _ = self.start_pose
+        return_offset = math.hypot(self.x - start_x, self.y - start_y)
+        print(f"  📍 [Return Check] คลาดจากจุดเริ่มตาม odom {return_offset:.2f}m")
+        if return_offset > ARRIVAL_TOLERANCE_M:
+            print("  ⚠️ [SCENARIO 1 FINISHED WITH POSITION ERROR] ถึงครัวแต่ยังคลาดจากจุดเริ่ม")
+        else:
+            print("  🎉 [SCENARIO 1 COMPLETED] ส่งอาหารโต๊ะ 1 สำเร็จ จอดพร้อมรับงานรอบใหม่!")
         print("=" * 60 + "\n")
 
     def _execute_scenario_2(self):
@@ -607,30 +657,41 @@ class ScenarioRunnerNode(Node):
         print("1. ชั้น 1: Table 1 | ชั้น 2: Table 2 -> กดยืนยัน (#)")
         time.sleep(1.0)
 
+        start_heading = self.start_pose[2]
+        heading_out = self._wrap_angle(start_heading)
+        heading_table1 = self._wrap_angle(start_heading + math.pi / 2.0)
+        heading_table2 = self._wrap_angle(start_heading - math.pi / 2.0)
+        heading_kitchen = self._wrap_angle(start_heading + math.pi)
+
         # --- Deliver Table 1 ---
         print("\n>>> ส่งโต๊ะที่ 1 (Table 1) <<<")
-        if not self.drive_forward(JUNCTION_X): return
-        if not self.turn_degrees(+90.0): return
-        if not self.drive_forward(TABLE1_Y): return
+        if not self.drive_forward(JUNCTION_X, target_heading=heading_out): return
+        if not self.turn_to_heading(heading_table1): return
+        if not self.drive_forward(TABLE1_Y, target_heading=heading_table1): return
         self.wait_customer_pickup("Table 1 (ชั้น 1)", wait_sec=3.0)
 
         # --- Deliver Table 2 ---
         print("\n>>> เดินทางไปส่งโต๊ะที่ 2 (Table 2) <<<")
-        if not self.turn_degrees(+180.0): return
-        if not self.drive_forward(TABLE1_Y): return
-        if not self.drive_forward(TABLE2_Y): return
+        if not self.turn_to_heading(heading_table2): return
+        if not self.drive_forward(TABLE1_Y, target_heading=heading_table2): return
+        if not self.drive_forward(TABLE2_Y, target_heading=heading_table2): return
         self.wait_customer_pickup("Table 2 (ชั้น 2)", wait_sec=3.0)
 
         # --- Return to Kitchen ---
         print("\n>>> ส่งครบทั้ง 2 โต๊ะแล้ว เดินทางกลับครัว <<<")
-        if not self.turn_degrees(+180.0): return
-        if not self.drive_forward(TABLE2_Y): return
-        if not self.drive_forward(TABLE1_Y): return
-        if not self.turn_degrees(+90.0): return
-        if not self.drive_forward(JUNCTION_X): return
+        if not self.turn_to_heading(heading_table1): return
+        if not self.drive_forward(TABLE2_Y, target_heading=heading_table1): return
+        if not self.turn_to_heading(heading_kitchen): return
+        if not self.drive_forward(JUNCTION_X, target_heading=heading_kitchen): return
 
         print("\n" + "=" * 60)
-        print("  🎉 [SCENARIO 2 COMPLETED] เสิร์ฟครบ 2 โต๊ะ และเดินทางกลับครัวเรียบร้อย!")
+        start_x, start_y, _ = self.start_pose
+        return_offset = math.hypot(self.x - start_x, self.y - start_y)
+        print(f"  📍 [Return Check] คลาดจากจุดเริ่มตาม odom {return_offset:.2f}m")
+        if return_offset > ARRIVAL_TOLERANCE_M:
+            print("  ⚠️ [SCENARIO 2 FINISHED WITH POSITION ERROR] ถึงครัวแต่ยังคลาดจากจุดเริ่ม")
+        else:
+            print("  🎉 [SCENARIO 2 COMPLETED] เสิร์ฟครบ 2 โต๊ะ และเดินทางกลับครัวเรียบร้อย!")
         print("=" * 60 + "\n")
 
 
