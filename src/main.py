@@ -39,6 +39,7 @@ from odometry import Odometry
 from motion_client import MotionClient
 from shelf_client import ShelfClient, VirtualShelfClient
 from delivery_fsm import DeliveryFSM
+from pos_server import PosBridge, PosServer
 from lidar_safety import LidarSafetyGuard
 from waypoint_controller import WaypointController
 
@@ -193,7 +194,7 @@ def main() -> None:
         shelf = ShelfClient(shelf_ser)
     else:
         logger.info("[main] Arduino #2 (Shelf) not connected. Running with VirtualShelfClient.")
-        shelf = VirtualShelfClient(auto_dispatch=True, default_shelf=1, default_table=1)
+        shelf = VirtualShelfClient(auto_dispatch=False)
 
     # --- LiDAR Safety Guard ---
     safety_guard = LidarSafetyGuard(
@@ -234,21 +235,31 @@ def main() -> None:
 
     logger.info("[main] All subsystems started. Launching Main FSM.")
 
-    # --- Run Main FSM (blocks forever) ---
+    # --- Local POS Server and Main FSM ---
+    pos_bridge = PosBridge()
     fsm = DeliveryFSM(
         motion=motion,
         odometry=odometry,
         shelf=shelf,
+        pos_bridge=pos_bridge,
         waypoint_controller=waypoint_ctrl,
     )
+    pos_server = None
     try:
+        pos_port = int(os.environ.get("POS_PORT", "8765"))
+        pos_server = PosServer(pos_bridge, host="127.0.0.1", port=pos_port)
+        pos_server.start()
+        logger.info("[main] POS touchscreen available at %s", pos_server.url)
         fsm.run()
     except Exception as e:
         logger.exception(f"[main] Unhandled FSM exception: {e}")
         motion.stop_continuous()
         motion.stop()
+        raise
     finally:
         logger.info("[main] Cleaning up...")
+        if pos_server is not None:
+            pos_server.stop()
         motion.stop_continuous()
         odometry.stop()
         shelf.stop()

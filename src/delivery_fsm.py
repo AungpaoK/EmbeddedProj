@@ -1,120 +1,74 @@
 #!/usr/bin/env python3
-"""
-delivery_fsm.py — Main Delivery FSM
-=====================================
-Implements the full Main Delivery FSM ตาม docs/FSM.md และ docs/scenario.md
+"""Main delivery FSM controlled by the local POS touchscreen."""
 
-States:
-    SELECT_FLOOR   → รอพนักงานเลือกชั้น (กด 1/2 + B)
-    WAIT_FOR_IR    → รอ IR Sensor ตรวจพบอาหาร
-    ENTER_TABLE    → รับหมายเลขโต๊ะจาก Keypad
-    SHOW_LIST      → แสดงรายการ แล้วรอ # เพื่อส่ง หรือ A เพื่อเพิ่ม
-    RESET_ALL      → ล้างงานทั้งหมด กลับสู่ SELECT_FLOOR
-    DELIVERING     → ส่งอาหารไปยังโต๊ะ (เรียก Motion Sequence)
-    WAIT_PICKUP    → รอ IR ตรวจไม่พบ (อาหารถูกหยิบ) / Manual Override
-    CHECK_REMAIN   → ตรวจว่าเหลือโต๊ะต้องส่งอีกไหม
-    RETURN_STATION → กลับ Serve Station
-"""
+from __future__ import annotations
 
 import logging
+import math
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum, auto
 
-from config import (
-    JUNCTION_X,
-    TABLE1_Y,
-    TABLE2_Y,
-    PICKUP_WAIT_TIMEOUT_S,
-)
+from config import ARRIVAL_TOLERANCE_M, JUNCTION_X, TABLE1_Y, TABLE2_Y
 from motion_client import MotionClient
 from odometry import Odometry
+from pos_server import PosBridge
 from shelf_client import ShelfClient
 
 logger = logging.getLogger(__name__)
 
 
-# ===========================================================
-# State Enum
-# ===========================================================
 class State(Enum):
-    SELECT_FLOOR   = auto()
-    WAIT_FOR_IR    = auto()
-    ENTER_TABLE    = auto()
-    SHOW_LIST      = auto()
-    RESET_ALL      = auto()
-    DELIVERING     = auto()
-    WAIT_PICKUP    = auto()
-    CHECK_REMAIN   = auto()
+    WAIT_FOR_POS = auto()
+    DELIVERING = auto()
+    WAIT_PICKUP = auto()
+    CHECK_REMAIN = auto()
     RETURN_STATION = auto()
+    ERROR = auto()
 
 
-# ===========================================================
-# Delivery Order Data
-# ===========================================================
-@dataclass
+@dataclass(frozen=True)
 class DeliveryOrder:
-    """คำสั่งเสิร์ฟหนึ่งรายการ: ชั้น (shelf) → โต๊ะ (table_id)"""
-    shelf: int       # 1 หรือ 2
-    table_id: int    # 1 หรือ 2
+    """One confirmed shelf-to-table delivery."""
+
+    shelf: int
+    table_id: int
 
 
-# ===========================================================
-# Main Delivery FSM
-# ===========================================================
 class DeliveryFSM:
-    """
-    Main Delivery Finite State Machine
-    ควบคุมลำดับการส่งอาหารตาม docs/FSM.md
-    """
+    """Owns every robot movement and consumes UI commands between movements."""
 
     def __init__(
         self,
         motion: MotionClient,
         odometry: Odometry,
         shelf: ShelfClient,
+        pos_bridge: PosBridge,
         waypoint_controller=None,
     ) -> None:
         self._motion = motion
         self._odom = odometry
         self._shelf = shelf
+        self._pos = pos_bridge
         self._waypoint_ctrl = waypoint_controller
 
-        self._state = State.SELECT_FLOOR
-
-        # รายการคำสั่งเสิร์ฟ (คิว)
+        self._state = State.WAIT_FOR_POS
         self._orders: list[DeliveryOrder] = []
-        self._current_shelf: int | None = None  # ชั้นที่เลือกอยู่ตอน setup
-
-    # ------------------------------------------------------------------
-    # Main Run Loop
-    # ------------------------------------------------------------------
+        self._mission_id: str | None = None
+        self._current_order_index: int | None = None
 
     def run(self) -> None:
-        """วน Loop ตามสถานะ FSM จนกว่าจะ Shutdown"""
-        logger.info("[FSM] Delivery FSM started.")
+        logger.info("[FSM] POS-controlled Delivery FSM started.")
         print("\n" + "=" * 55)
-        print("  Food Delivery Robot — Main FSM")
+        print("  Food Delivery Robot — POS Control")
         print("=" * 55)
-
         while True:
             self._step()
 
     def _step(self) -> None:
-        """ดำเนินการ 1 ขั้นตอนตาม state ปัจจุบัน"""
-        logger.debug(f"[FSM] State: {self._state.name}")
-
         match self._state:
-            case State.SELECT_FLOOR:
-                self._state_select_floor()
-            case State.WAIT_FOR_IR:
-                self._state_wait_for_ir()
-            case State.ENTER_TABLE:
-                self._state_enter_table()
-            case State.SHOW_LIST:
-                self._state_show_list()
-            case State.RESET_ALL:
-                self._state_reset_all()
+            case State.WAIT_FOR_POS:
+                self._state_wait_for_pos()
             case State.DELIVERING:
                 self._state_delivering()
             case State.WAIT_PICKUP:
@@ -123,279 +77,246 @@ class DeliveryFSM:
                 self._state_check_remain()
             case State.RETURN_STATION:
                 self._state_return_station()
+            case State.ERROR:
+                time.sleep(0.25)
 
-    # ------------------------------------------------------------------
-    # State Handlers
-    # ------------------------------------------------------------------
-
-    def _state_select_floor(self) -> None:
-        """รอพนักงานเลือกชั้น (กด 1 หรือ 2) แล้วกด B ยืนยัน"""
-        self._print_status("เลือกชั้น (กด 1 หรือ 2) แล้วกด B ยืนยัน")
-        self._shelf.lcd_print(0, "Select shelf:")
-        self._shelf.lcd_print(1, "[1] or [2] + B")
-
-        while True:
-            key = self._shelf.wait_for_key(valid_keys=["1", "2"])
-            if key is None:
-                continue
-            self._current_shelf = int(key)
-            logger.info(f"[FSM] Shelf selected: {self._current_shelf}")
-            self._shelf.lcd_print(0, f"Shelf {self._current_shelf} selected")
-            self._shelf.lcd_print(1, "Press B to confirm")
-
-            # รอ B ยืนยัน
-            confirm = self._shelf.wait_for_key(valid_keys=["B"], timeout=30.0)
-            if confirm == "B":
-                self._state = State.WAIT_FOR_IR
-                return
-            # ถ้า Timeout หรือกดผิดให้วนใหม่
-
-    def _state_wait_for_ir(self) -> None:
-        """รอ IR ตรวจพบอาหารบนชั้นที่เลือก หรือกด * เพื่อ Reset"""
-        self._print_status(f"วางอาหารบนชั้น {self._current_shelf} (กด * เพื่อยกเลิก)")
-        self._shelf.lcd_print(0, f"Shelf {self._current_shelf}: waiting")
-        self._shelf.lcd_print(1, "Place food or [*]")
-
-        while True:
-            # ตรวจ * (Cancel / Reset)
-            key = self._shelf.poll_key()
-            if key == "*":
-                logger.info("[FSM] RESET triggered by keypad *")
-                self._state = State.RESET_ALL
-                return
-
-            # ตรวจ IR
-            if self._shelf.ir_has_food(self._current_shelf):
-                logger.info(f"[FSM] Food detected on shelf {self._current_shelf}")
-                self._shelf.lcd_print(0, "Food detected!")
-                self._shelf.lcd_print(1, "Enter table num")
-                self._state = State.ENTER_TABLE
-                return
-
-            time.sleep(0.05)
-
-    def _state_enter_table(self) -> None:
-        """รับหมายเลขโต๊ะจาก Keypad แล้วกด C ยืนยัน"""
-        self._print_status("กรอกหมายเลขโต๊ะ (1 หรือ 2) แล้วกด C")
-        self._shelf.lcd_print(0, "Table number:")
-        self._shelf.lcd_print(1, "[1] or [2] + C")
-
-        while True:
-            key = self._shelf.wait_for_key(valid_keys=["1", "2"])
-            if key is None:
-                continue
-            table_id = int(key)
-            self._shelf.lcd_print(0, f"Table {table_id} chosen")
-            self._shelf.lcd_print(1, "Press C to confirm")
-
-            confirm = self._shelf.wait_for_key(valid_keys=["C"], timeout=30.0)
-            if confirm == "C":
-                order = DeliveryOrder(shelf=self._current_shelf, table_id=table_id)
-                self._orders.append(order)
-                logger.info(f"[FSM] Order added: Shelf {self._current_shelf} → Table {table_id}")
-                self._state = State.SHOW_LIST
-                return
-
-    def _state_show_list(self) -> None:
-        """แสดงรายการคำสั่งทั้งหมด รอ A (เพิ่ม) หรือ # (ยืนยันส่ง)"""
-        self._print_order_list()
-        self._shelf.lcd_print(0, "A:Add  #:Deliver")
-        self._shelf.lcd_print(1, f"{len(self._orders)} order(s)")
-
-        key = self._shelf.wait_for_key(valid_keys=["A", "#"])
-        if key == "A":
-            self._state = State.SELECT_FLOOR
-        elif key == "#":
-            logger.info("[FSM] Delivery confirmed. Starting delivery sequence.")
-            self._state = State.DELIVERING
-
-    def _state_reset_all(self) -> None:
-        """ล้างงานทั้งหมดและกลับสู่จุดเริ่มต้น"""
-        logger.info("[FSM] Resetting all orders.")
-        self._orders.clear()
-        self._current_shelf = None
-        self._shelf.lcd_print(0, "RESET DONE")
-        self._shelf.lcd_print(1, "Ready...")
-        time.sleep(1.0)
-        self._state = State.SELECT_FLOOR
-
-    def _state_delivering(self) -> None:
-        """
-        ส่งอาหารให้โต๊ะถัดไปจากคิว
-        Sequence: Station → Junction → เลี้ยว → โต๊ะ
-        """
-        if not self._orders:
-            # ไม่มีคิวแล้ว ให้ตรวจสอบผิดปกติ
-            self._state = State.CHECK_REMAIN
+    def _state_wait_for_pos(self) -> None:
+        mission = self._pos.take_mission(timeout=0.25)
+        if mission is None:
             return
 
-        # หยิบ order แรกจากคิว
-        order = self._orders[0]
-        target_y = TABLE1_Y if order.table_id == 1 else -TABLE2_Y
-        turn_deg = +90.0 if order.table_id == 1 else -90.0
+        self._mission_id = mission["mission_id"]
+        self._orders = [
+            DeliveryOrder(shelf=item["shelf"], table_id=item["table_id"])
+            for item in mission["orders"]
+        ]
+        self._current_order_index = 0
+        logger.info(
+            "[FSM] Mission %s accepted with %d order(s)",
+            self._mission_id,
+            len(self._orders),
+        )
+        self._state = State.DELIVERING
 
-        self._print_status(f"กำลังส่งอาหาร → โต๊ะ {order.table_id} (ชั้น {order.shelf})")
+    def _state_delivering(self) -> None:
+        if self._mission_id is None or self._current_order_index is None:
+            self._latch_error("ไม่พบข้อมูลภารกิจที่กำลังส่ง")
+            return
+        if self._current_order_index >= len(self._orders):
+            self._state = State.RETURN_STATION
+            return
+
+        order = self._orders[self._current_order_index]
+        message = f"กำลังเดินทางไปโต๊ะ {order.table_id}"
+        self._pos.set_state(
+            "NAVIGATING",
+            message=message,
+            current_order_index=self._current_order_index,
+        )
+        self._print_status(
+            f"{message} (ชั้น {order.shelf})"
+        )
         self._shelf.lcd_print(0, f"Delivering T{order.table_id}")
         self._shelf.lcd_print(1, f"Shelf {order.shelf}...")
 
-        # --- ใช้ Continuous WaypointController (ถ้ามี) ---
-        if self._waypoint_ctrl is not None:
-            # 1. นำทางไปยัง Junction (X = JUNCTION_X, Y = 0.0)
-            ok = self._waypoint_ctrl.navigate_to(JUNCTION_X, 0.0)
-            if not ok:
-                logger.error("[FSM] WaypointController failed to reach junction.")
-                self._motion.stop_continuous()
-                return
+        try:
+            reached = self._navigate_to_table(order, self._current_order_index)
+        except Exception as exc:
+            logger.exception("[FSM] Navigation raised an exception")
+            self._latch_error(f"ระบบนำทางขัดข้อง: {exc}")
+            return
+        if not reached:
+            self._latch_error(f"ไปไม่ถึงโต๊ะ {order.table_id}; หยุดหุ่นยนต์แล้ว")
+            return
 
-            # 2. นำทางเข้าเทียบโต๊ะ (X = JUNCTION_X, Y = target_y, Heading = turn_deg)
-            ok = self._waypoint_ctrl.navigate_to(JUNCTION_X, target_y, target_theta_deg=turn_deg)
-            if not ok:
-                logger.error(f"[FSM] WaypointController failed to reach Table {order.table_id}.")
-                self._motion.stop_continuous()
-                return
-        else:
-            # --- Fallback เป็น Discrete Sequence เดิม ---
-            x, y, _ = self._odom.pose
-
-            # 1. วิ่งตรงไปยัง Junction (ถ้ายังไม่ถึง)
-            dist_to_junction = JUNCTION_X - x
-            if dist_to_junction > 0.05:
-                ok = self._motion.forward(dist_to_junction)
-                if not ok:
-                    logger.error("[FSM] Failed to reach junction. Stopping.")
-                    self._motion.stop()
-                    return
-
-            # 2. เลี้ยวเข้าทิศโต๊ะ
-            ok = self._motion.turn(turn_deg)
-            if not ok:
-                logger.error(f"[FSM] Turn failed. Aborting delivery to table {order.table_id}.")
-                self._motion.stop()
-                return
-
-            # 3. วิ่งตรงเข้าหาโต๊ะ
-            ok = self._motion.forward(abs(target_y))
-            if not ok:
-                logger.error(f"[FSM] Forward to table {order.table_id} failed.")
-                self._motion.stop()
-                return
-
-        logger.info(f"[FSM] Arrived at Table {order.table_id}.")
         self._shelf.lcd_print(0, f"Arrived T{order.table_id}!")
-        self._shelf.lcd_print(1, "Wait pickup...")
-
+        self._shelf.lcd_print(1, "Waiting for pickup")
         self._state = State.WAIT_PICKUP
 
+    def _navigate_to_table(self, order: DeliveryOrder, index: int) -> bool:
+        target_y = TABLE1_Y if order.table_id == 1 else -TABLE2_Y
+        target_heading = 90.0 if order.table_id == 1 else -90.0
+
+        if self._waypoint_ctrl is not None:
+            if not self._waypoint_ctrl.navigate_to(JUNCTION_X, 0.0):
+                logger.error("[FSM] Failed to reach the junction.")
+                return False
+            return self._waypoint_ctrl.navigate_to(
+                JUNCTION_X,
+                target_y,
+                target_theta_deg=target_heading,
+            )
+
+        if index == 0:
+            x, y, heading = self._odom.pose
+            dx, dy = JUNCTION_X - x, -y
+            distance = math.hypot(dx, dy)
+            if distance > ARRIVAL_TOLERANCE_M:
+                desired = math.atan2(dy, dx)
+                turn = self._wrap_angle(desired - heading)
+                if abs(math.degrees(turn)) > 1.0 and not self._motion.turn(math.degrees(turn)):
+                    return False
+                if not self._motion.forward(distance):
+                    return False
+                heading = desired
+            turn = self._wrap_angle(math.radians(target_heading) - heading)
+            if abs(math.degrees(turn)) > 1.0 and not self._motion.turn(math.degrees(turn)):
+                return False
+            return self._motion.forward(abs(target_y))
+
+        previous = self._orders[index - 1]
+        previous_distance = TABLE1_Y if previous.table_id == 1 else TABLE2_Y
+        previous_heading = math.radians(90.0 if previous.table_id == 1 else -90.0)
+        if not self._motion.turn(180.0):
+            return False
+        if not self._motion.forward(previous_distance):
+            return False
+
+        heading_at_junction = self._wrap_angle(previous_heading + math.pi)
+        turn = self._wrap_angle(math.radians(target_heading) - heading_at_junction)
+        if abs(math.degrees(turn)) > 1.0 and not self._motion.turn(math.degrees(turn)):
+            return False
+        return self._motion.forward(abs(target_y))
+
     def _state_wait_pickup(self) -> None:
-        """รอลูกค้าหยิบอาหารออก (IR ไม่พบ) หรือ Manual Override"""
-        if not self._orders:
+        if self._mission_id is None or self._current_order_index is None:
+            self._latch_error("ไม่พบข้อมูลภารกิจระหว่างรอรับอาหาร")
+            return
+        if self._current_order_index >= len(self._orders):
             self._state = State.CHECK_REMAIN
             return
 
-        order = self._orders[0]
-        self._print_status(f"รอลูกค้ารับอาหาร โต๊ะ {order.table_id} ชั้น {order.shelf}")
-        self._shelf.lcd_print(0, "Waiting pickup...")
-        self._shelf.lcd_print(1, "OVERRIDE btn=skip")
+        order = self._orders[self._current_order_index]
+        while self._shelf.consume_override():
+            logger.warning("[FSM] Discarded a physical override pressed before arrival.")
 
-        picked = self._shelf.wait_for_food_removed(
-            shelf=order.shelf,
-            timeout=PICKUP_WAIT_TIMEOUT_S,
+        message = f"ถึงโต๊ะ {order.table_id} แล้ว กรุณายืนยันเมื่อรับอาหาร"
+        self._pos.set_state(
+            "WAITING_PICKUP",
+            message=message,
+            current_order_index=self._current_order_index,
         )
+        self._print_status(
+            f"รอผู้ใช้ยืนยันรับอาหาร โต๊ะ {order.table_id} ชั้น {order.shelf}"
+        )
+        self._shelf.lcd_print(0, f"Waiting T{order.table_id}")
+        self._shelf.lcd_print(1, "Confirm on POS")
 
-        if picked:
-            logger.info(f"[FSM] Food picked from shelf {order.shelf}. Order complete.")
-            self._orders.pop(0)  # ลบ order ที่เสร็จแล้วออกจากคิว
-        else:
-            logger.warning(f"[FSM] Pickup timeout for table {order.table_id}. Skipping.")
-            self._orders.pop(0)
+        expected = (self._mission_id, self._current_order_index)
+        while True:
+            if self._shelf.consume_override():
+                logger.info("[FSM] Physical pickup override pressed.")
+                break
 
+            confirmation = self._pos.take_pickup_confirmation(timeout=0.1)
+            if confirmation is None:
+                continue
+            if confirmation == expected:
+                break
+            logger.warning("[FSM] Ignored stale pickup confirmation.")
+
+        logger.info("[FSM] Pickup confirmed for shelf %d.", order.shelf)
         self._state = State.CHECK_REMAIN
 
     def _state_check_remain(self) -> None:
-        """ตรวจสอบว่ายังมีคิวการส่งอยู่อีกไหม"""
-        if self._orders:
-            logger.info(f"[FSM] {len(self._orders)} order(s) remaining. Continuing delivery.")
+        if self._current_order_index is None:
+            self._latch_error("ไม่พบลำดับรายการส่ง")
+            return
 
-            # U-Turn ที่โต๊ะนี้ แล้ววิ่งกลับไปที่ Junction เพื่อไปโต๊ะถัดไป
-            next_order = self._orders[0]
-            next_turn_deg = +90.0 if next_order.table_id == 1 else -90.0
-
+        next_index = self._current_order_index + 1
+        if next_index < len(self._orders):
+            self._current_order_index = next_index
+            next_order = self._orders[next_index]
             self._shelf.lcd_print(0, "Next delivery...")
             self._shelf.lcd_print(1, f"Table {next_order.table_id}")
-
-            # U-Turn กลับทาง
-            self._motion.u_turn()
-            # วิ่งกลับ Junction  (ระยะเท่ากับที่เข้ามา ขึ้นอยู่กับ order ก่อนหน้า)
-            prev_y = TABLE1_Y if (len(self._orders) < 2) else TABLE2_Y
-            self._motion.forward(prev_y)
-            # เลี้ยวเข้าซอยโต๊ะถัดไป
-            self._motion.turn(next_turn_deg)
-
             self._state = State.DELIVERING
-        else:
-            logger.info("[FSM] All orders delivered. Returning to station.")
-            self._state = State.RETURN_STATION
+            return
+
+        self._state = State.RETURN_STATION
 
     def _state_return_station(self) -> None:
-        """
-        กลับ Serve Station
-        Sequence: U-Turn → วิ่งกลับ Junction → เลี้ยวขวา 90° → วิ่งเข้า Station → U-Turn
-        """
-        self._print_status("กำลังกลับ Serve Station...")
+        if self._mission_id is None or not self._orders:
+            self._latch_error("ไม่พบข้อมูลสำหรับเดินทางกลับครัว")
+            return
+
+        self._pos.set_state(
+            "RETURNING",
+            message="ส่งครบแล้ว กำลังกลับครัว",
+            current_order_index=self._current_order_index,
+        )
+        self._print_status("กำลังกลับ Serve Station")
         self._shelf.lcd_print(0, "Returning home...")
         self._shelf.lcd_print(1, "Please wait")
 
-        # --- ใช้ Continuous WaypointController (ถ้ามี) ---
-        if self._waypoint_ctrl is not None:
-            # 1. วิ่งกลับมายัง Junction (X = JUNCTION_X, Y = 0.0)
-            self._waypoint_ctrl.navigate_to(JUNCTION_X, 0.0)
-            # 2. วิ่งเข้า Serve Station (X = 0.0, Y = 0.0) และหันหน้าออก (0.0°)
-            self._waypoint_ctrl.navigate_to(0.0, 0.0, target_theta_deg=0.0)
-            self._odom.reset()
-        else:
-            # --- Fallback เป็น Discrete Sequence เดิม ---
-            x, y, _ = self._odom.pose
+        try:
+            if self._waypoint_ctrl is not None:
+                reached = self._waypoint_ctrl.navigate_to(JUNCTION_X, 0.0)
+                if reached:
+                    reached = self._waypoint_ctrl.navigate_to(
+                        0.0,
+                        0.0,
+                        target_theta_deg=0.0,
+                    )
+            else:
+                reached = self._return_with_discrete_motion()
+        except Exception as exc:
+            logger.exception("[FSM] Return navigation raised an exception")
+            self._latch_error(f"ระบบนำทางกลับครัวขัดข้อง: {exc}")
+            return
 
-            # 1. U-Turn ที่โต๊ะสุดท้าย (หรือตำแหน่งปัจจุบัน)
-            self._motion.u_turn()
+        if not reached:
+            self._latch_error("กลับครัวไม่สำเร็จ; หยุดหุ่นยนต์แล้ว")
+            return
 
-            # 2. วิ่งกลับจาก Y-offset ไปยัง Junction (Y = 0)
-            dist_back_y = abs(y)
-            if dist_back_y > 0.05:
-                self._motion.forward(dist_back_y)
-
-            # 3. เลี้ยวขวา 90° มุ่งหน้ากลับ Station (−X direction)
-            self._motion.turn(-90.0)
-
-            # 4. วิ่งตรงกลับ Station (X = 0)
-            dist_to_home = JUNCTION_X
-            self._motion.forward(dist_to_home)
-
-            # 5. U-Turn ที่ Station เพื่อหันหน้าออก (พร้อมรับงานรอบถัดไป)
-            self._motion.u_turn()
-
-            # 6. Reset Odometry กลับเป็น (0, 0, 0)
-            self._odom.reset()
-
-        logger.info("[FSM] Returned to Serve Station. Ready for next round.")
+        self._odom.reset()
         self._shelf.lcd_print(0, "Home! Ready.")
         self._shelf.lcd_print(1, "")
+        self._pos.set_state(
+            "COMPLETED",
+            message="กลับถึงครัวแล้ว พร้อมรับงานรอบใหม่",
+            current_order_index=self._current_order_index,
+        )
+        logger.info("[FSM] Mission %s completed.", self._mission_id)
+        self._orders = []
+        self._mission_id = None
+        self._current_order_index = None
+        self._state = State.WAIT_FOR_POS
 
-        print("\n" + "=" * 55)
-        print("  ✓ กลับถึง Serve Station — พร้อมรับงานรอบถัดไป")
-        print("=" * 55 + "\n")
+    def _return_with_discrete_motion(self) -> bool:
+        last_order = self._orders[-1]
+        last_distance = TABLE1_Y if last_order.table_id == 1 else TABLE2_Y
+        last_heading = math.radians(90.0 if last_order.table_id == 1 else -90.0)
 
-        self._state = State.SELECT_FLOOR
+        if not self._motion.turn(180.0):
+            return False
+        if not self._motion.forward(last_distance):
+            return False
 
-    # ------------------------------------------------------------------
-    # Display Helpers
-    # ------------------------------------------------------------------
+        heading_at_junction = self._wrap_angle(last_heading + math.pi)
+        turn_to_kitchen = self._wrap_angle(math.pi - heading_at_junction)
+        if not self._motion.turn(math.degrees(turn_to_kitchen)):
+            return False
+        if not self._motion.forward(JUNCTION_X):
+            return False
+        return self._motion.turn(-180.0)
 
-    def _print_status(self, msg: str) -> None:
-        print(f"\n[FSM:{self._state.name}] {msg}")
+    def _latch_error(self, message: str) -> None:
+        logger.error("[FSM] %s", message)
+        try:
+            self._motion.stop_continuous()
+        except Exception:
+            logger.exception("[FSM] Continuous stop command failed")
+        try:
+            self._motion.stop()
+        except Exception:
+            logger.exception("[FSM] Stop command failed")
+        self._pos.set_state("ERROR", message=message, error=message)
+        self._state = State.ERROR
 
-    def _print_order_list(self) -> None:
-        print(f"\n[FSM] === Order List ({len(self._orders)} item(s)) ===")
-        for i, o in enumerate(self._orders, 1):
-            print(f"  {i}. Shelf {o.shelf} → Table {o.table_id}")
-        print("  กด A = เพิ่มรายการ  |  # = ยืนยันส่งทั้งหมด")
+    @staticmethod
+    def _wrap_angle(angle: float) -> float:
+        return math.atan2(math.sin(angle), math.cos(angle))
+
+    @staticmethod
+    def _print_status(message: str) -> None:
+        print(f"\n[FSM] {message}")

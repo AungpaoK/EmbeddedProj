@@ -2,33 +2,39 @@
 
 ## 1. Main Delivery FSM (ระบบจัดการการส่งอาหาร)
 
+การทำงานจริงของ main.py รับรายการจาก POS ผ่าน HTTP ใน process เดียวกัน เว็บ
+ส่งคำสั่งเข้าคิว thread-safe และ Main FSM เป็นผู้ควบคุมการเคลื่อนที่เอง
+ผู้ใช้เลือกปลายทางให้ชั้นที่ใช้งานและยืนยันว่าของวางแล้ว จากนั้นยืนยันการรับ
+อาหารที่แต่ละโต๊ะผ่านหน้าจอ หรือใช้ physical override เดิมแทนการยืนยันได้
+รุ่นนี้ยังไม่ใช้ IR sensor สำหรับตรวจวางหรือหยิบอาหาร
+
 ```mermaid
 stateDiagram-v2
-    [*] --> SelectFloor: start
+    [*] --> WaitForPOS: start
 
-    SelectFloor: เลือกชั้น กด 1 หรือ 2 และกด B เพื่อยืนยัน
-    WaitForIR: รอ IR ตรวจพบอาหาร บนชั้นที่เลือก
-    EnterTable: กรอกหมายเลขโต๊ะ
-    ShowList: แสดง LIST รายการอาหาร และโต๊ะ
-    ResetAll: RESET ล้างงานทั้งหมด
+    WaitForPOS: รอรายการจาก POS
     Delivering: ส่งอาหาร (เรียกใช้ Motion Sub-FSM)
-    WaitForPickup: ถึงโต๊ะแล้วรอ IR ตรวจว่าอาหารถูกหยิบ
+    WaitForPickup: รอ POS ยืนยันรับอาหาร หรือ physical override
     CheckRemaining: มีอาหารที่ยังไม่ส่ง?
     ReturnStation: กลับ station (เรียกใช้ Motion Sub-FSM)
+    Error: หยุดการเคลื่อนที่และรอการตรวจสอบ
 
-    SelectFloor --> WaitForIR: กด B
-    WaitForIR --> EnterTable: ir ตรวจเจออาหาร
-    WaitForIR --> ResetAll: กด *
-    ResetAll --> SelectFloor
-    EnterTable --> ShowList: กด C เพื่อยืนยัน
-    ShowList --> SelectFloor: กด A
-    ShowList --> Delivering: กด # เพื่อยืนยันการส่ง
+    WaitForPOS --> Delivering: รับภารกิจที่ตรวจสอบแล้ว
     Delivering --> WaitForPickup: Motion Sub-FSM เสร็จสิ้น (ถึงโต๊ะ)
-    WaitForPickup --> CheckRemaining: อาหารถูกหยิบออก
+    Delivering --> Error: นำทางไม่สำเร็จ
+    WaitForPickup --> CheckRemaining: ยืนยันรับอาหาร
     CheckRemaining --> Delivering: มี (ส่งโต๊ะถัดไป)
     CheckRemaining --> ReturnStation: ไม่มี
-    ReturnStation --> SelectFloor: Motion Sub-FSM เสร็จสิ้น (ถึง Station)
+    ReturnStation --> WaitForPOS: Motion Sub-FSM เสร็จสิ้น (ถึง Station)
+    ReturnStation --> Error: กลับ station ไม่สำเร็จ
 ```
+
+รายการส่งเรียงตามหมายเลขชั้นจากน้อยไปมาก (ชั้น 1 ก่อนชั้น 2) เมื่อรอรับอาหาร
+FSM จะไม่ข้ามรายการตามเวลา หากการนำทางล้มเหลว ระบบหยุดมอเตอร์และค้างสถานะ
+Error จนกว่าจะตรวจสอบและกู้คืนหุ่นยนต์
+
+POS มีเฉพาะใน main.py; scenario_runner.py ยังคงเป็น scenario runner แยก
+และไม่ได้รับคำสั่งจากหน้า POS
 
 ---
 

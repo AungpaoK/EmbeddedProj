@@ -1,14 +1,175 @@
 <!doctype html>
 <html lang="th">
   <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=1024" />
-    <meta name="description" content="Robot Waiter Touchscreen UI – 2-Table Delivery System" />
-    <title>ROBO-WAITER | 2-Table System</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#101a2b">
+    <meta name="description" content="หน้าจอควบคุมหุ่นยนต์ส่งอาหาร">
+    <title>Robot POS</title>
+    <link rel="stylesheet" href="/app.css">
+    <script src="/app.js" defer></script>
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <div class="kiosk">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" fill="none">
+              <path d="M7 12.5h18v12H7z" stroke="currentColor" stroke-width="2" />
+              <path d="M11 12V8.5a5 5 0 0 1 10 0V12M11 18h.01M21 18h.01M13 21h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              <path d="M4 17v4M28 17v4" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            </svg>
+          </div>
+          <div>
+            <strong>ROBO WAITER</strong>
+            <span>หน้าจอควบคุมหุ่นยนต์</span>
+          </div>
+        </div>
+
+        <div class="topbar-center">
+          <span id="status-dot" class="status-dot"></span>
+          <span id="status-label">กำลังเชื่อมต่อ...</span>
+        </div>
+
+        <div class="topbar-right">
+          <span id="connection-label" class="connection-label">เชื่อมต่อระบบ</span>
+          <span id="clock" class="clock">--:--</span>
+          <button id="fullscreen-button" class="icon-button" type="button" aria-label="เต็มหน้าจอ" title="เต็มหน้าจอ">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <div id="connection-warning" class="connection-warning" role="status" hidden>
+        เชื่อมต่อ controller ไม่ได้ — ภารกิจที่เริ่มแล้วจะยังทำงานต่อ
+      </div>
+
+      <main class="main">
+        <section id="setup-view" class="setup-view" aria-labelledby="setup-heading">
+          <aside class="robot-panel">
+            <div class="robot-illustration" aria-hidden="true">
+              <div class="robot-antenna"></div>
+              <div class="robot-head">
+                <span class="robot-eye"></span>
+                <span class="robot-eye"></span>
+              </div>
+              <div class="robot-body">
+                <div class="robot-shelf"><span>ชั้น 1</span><span id="robot-table-1">ว่าง</span></div>
+                <div class="robot-shelf"><span>ชั้น 2</span><span id="robot-table-2">ว่าง</span></div>
+                <div class="robot-base"><i></i><i></i></div>
+              </div>
+            </div>
+            <div class="robot-caption">
+              <span class="caption-led"></span>
+              <span>พร้อมจัดรายการส่ง</span>
+            </div>
+          </aside>
+
+          <div class="order-panel">
+            <div class="section-heading">
+              <div>
+                <p class="eyebrow">KITCHEN · ORDER SETUP</p>
+                <h1 id="setup-heading">จัดรายการส่งอาหาร</h1>
+              </div>
+              <span class="capacity-tag">สูงสุด 2 รายการ</span>
+            </div>
+
+            <p class="instruction">เลือกโต๊ะสำหรับแต่ละชั้น แล้วยืนยันเมื่อวางอาหารเรียบร้อย</p>
+
+            <div class="order-cards">
+              <article class="order-card" data-order-card data-shelf="1">
+                <header class="order-card-heading">
+                  <div class="shelf-name">
+                    <span class="shelf-number">1</span>
+                    <span><strong>ชั้น 1</strong><small>TOP</small></span>
+                  </div>
+                  <button class="clear-button" type="button" data-action="clear" data-shelf="1" aria-label="ล้างชั้น 1" disabled>ล้าง</button>
+                </header>
+                <div class="table-options" role="group" aria-label="เลือกโต๊ะสำหรับชั้น 1">
+                  <button class="table-option" type="button" data-action="table" data-shelf="1" data-table="1" aria-pressed="false">โต๊ะ 1</button>
+                  <button class="table-option" type="button" data-action="table" data-shelf="1" data-table="2" aria-pressed="false">โต๊ะ 2</button>
+                </div>
+                <button class="loaded-button" type="button" data-action="loaded" data-shelf="1" aria-pressed="false" disabled>
+                  <span class="loaded-indicator"></span>
+                  <span>ยืนยันว่าใส่อาหารแล้ว</span>
+                </button>
+              </article>
+
+              <article class="order-card" data-order-card data-shelf="2">
+                <header class="order-card-heading">
+                  <div class="shelf-name">
+                    <span class="shelf-number shelf-number--purple">2</span>
+                    <span><strong>ชั้น 2</strong><small>MID</small></span>
+                  </div>
+                  <button class="clear-button" type="button" data-action="clear" data-shelf="2" aria-label="ล้างชั้น 2" disabled>ล้าง</button>
+                </header>
+                <div class="table-options" role="group" aria-label="เลือกโต๊ะสำหรับชั้น 2">
+                  <button class="table-option" type="button" data-action="table" data-shelf="2" data-table="1" aria-pressed="false">โต๊ะ 1</button>
+                  <button class="table-option" type="button" data-action="table" data-shelf="2" data-table="2" aria-pressed="false">โต๊ะ 2</button>
+                </div>
+                <button class="loaded-button" type="button" data-action="loaded" data-shelf="2" aria-pressed="false" disabled>
+                  <span class="loaded-indicator"></span>
+                  <span>ยืนยันว่าใส่อาหารแล้ว</span>
+                </button>
+              </article>
+            </div>
+
+            <p id="setup-message" class="setup-message" aria-live="polite">เลือกอย่างน้อยหนึ่งชั้นเพื่อเริ่มงาน</p>
+            <div id="completion-banner" class="completion-banner" role="status" hidden>
+              <span class="completion-check">✓</span>
+              <span id="completion-message">กลับถึงครัวแล้ว พร้อมรับงานรอบใหม่</span>
+            </div>
+          </div>
+        </section>
+
+        <section id="delivery-view" class="delivery-view" aria-live="polite" hidden>
+          <div class="delivery-heading">
+            <div>
+              <p class="eyebrow">DELIVERY STATUS</p>
+              <h1 id="delivery-title">กำลังทำงาน</h1>
+            </div>
+            <div id="delivery-stops" class="delivery-stops" aria-label="ลำดับการส่ง"></div>
+          </div>
+
+          <div class="delivery-center">
+            <div id="delivery-orb" class="delivery-orb" aria-hidden="true">
+              <svg viewBox="0 0 64 64" fill="none">
+                <path d="M18 28h28v23H18z" stroke="currentColor" stroke-width="2.4" />
+                <path d="M24 28v-5a8 8 0 0 1 16 0v5M25 38h.01M39 38h.01M27 45h10M12 36v9m40-9v9" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" />
+              </svg>
+            </div>
+            <p id="delivery-message" class="delivery-message">กำลังเตรียมหุ่นยนต์</p>
+            <p id="delivery-destination" class="delivery-destination"></p>
+            <div id="error-panel" class="error-panel" role="alert" hidden>
+              <strong>ต้องตรวจสอบหุ่นยนต์</strong>
+              <span id="error-message"></span>
+              <small>ระบบหยุดรับงานใหม่เพื่อความปลอดภัย</small>
+            </div>
+            <button id="pickup-button" class="pickup-button" type="button" hidden>
+              <span class="pickup-check">✓</span>
+              รับอาหารแล้ว
+              <small id="pickup-next"></small>
+            </button>
+          </div>
+
+          <div id="mission-summary" class="mission-summary"></div>
+        </section>
+      </main>
+
+      <footer class="bottom-bar">
+        <div class="footer-note">
+          <span class="footer-shield" aria-hidden="true">●</span>
+          <span id="footer-status">ยืนยันการวางอาหารก่อนเริ่มจัดส่ง</span>
+        </div>
+        <button id="start-button" class="start-button" type="button" disabled>
+          เริ่มจัดส่ง
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="m9 5 7 7-7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+      </footer>
+    </div>
   </body>
 </html>

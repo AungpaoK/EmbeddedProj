@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Food Delivery POS Kiosk
+Comment=Open the robot touchscreen POS
+Exec=/usr/bin/env POS_URL=http://127.0.0.1:8765/ /bin/bash "__POS_PROJECT_DIR__/deploy/pos_kiosk.sh"
+Terminal=false
+X-GNOME-Autostart-enabled=true

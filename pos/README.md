@@ -1,32 +1,49 @@
-# React + TypeScript + Vite
+# Robot POS
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The POS is plain HTML, CSS, and browser JavaScript. The Python controller serves
+these files from the same process that runs the delivery FSM; Node.js and a
+frontend build step are not required.
 
-Currently, two official plugins are available:
+## Running
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Start the robot controller from the repository root:
 
-## React Compiler
+    python3 src/main.py
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+The page is served only on 127.0.0.1:8765. It is available at
+http://127.0.0.1:8765/ after the controller starts. The POS does not issue
+motion commands itself; it submits a mission to the Python FSM.
 
-## Expanding the Oxlint configuration
+For a mission, choose a destination for each used shelf and confirm that food
+has been placed on every selected shelf. The robot visits shelf 1's table
+before shelf 2's table. At each destination, confirm pickup on the touchscreen.
+The physical override button remains available as an alternate pickup
+confirmation. A browser reload reconnects to the current controller state.
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+## Ubuntu Desktop kiosk startup
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
+On a Pi configured for automatic desktop login, use the user-level systemd
+unit. It starts with the kiosk user's desktop session and does not require a
+root-owned unit or lingering. Replace __POS_PROJECT_DIR__ with the absolute
+repository path in deploy/food-delivery-pos.user.service.example, then run:
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+    mkdir -p ~/.config/systemd/user ~/.config/autostart
+    sed 's|__POS_PROJECT_DIR__|/absolute/path/to/EmbeddedProj|g' deploy/food-delivery-pos.user.service.example > ~/.config/systemd/user/food-delivery-pos.service
+    sed 's|__POS_PROJECT_DIR__|/absolute/path/to/EmbeddedProj|g' deploy/food-delivery-pos.desktop.example > ~/.config/autostart/food-delivery-pos.desktop
+    systemctl --user daemon-reload
+    systemctl --user enable --now food-delivery-pos.service
+
+The service launches deploy/run_pos_controller.sh, which sources the ROS 2
+Jazzy setup and the default workspace at ~/ros2_ws/install when present. Set
+ROS_SETUP or ROS_WS_SETUP in the unit if those setup files are elsewhere. The
+desktop entry waits up to 90 seconds for the local health endpoint before
+launching a browser in kiosk mode. The launcher checks for chromium,
+chromium-browser, then Firefox. If the executable has a different name, set
+POS_BROWSER near the top of deploy/pos_kiosk.sh.
+
+Ubuntu must be configured to automatically log in to the kiosk account so its
+user service and desktop autostart run after boot. The account needs access to
+the robot serial device (normally membership in the dialout group). A system
+service template is also provided for setups that need the controller before
+desktop login; that alternative requires sudo and automatic desktop login for
+the browser. The POS port defaults to 8765.

@@ -224,7 +224,10 @@ class VirtualShelfClient:
         logger.info("[VirtualShelf] Virtual Shelf Client started (Mock Hardware UI).")
         print("\n" + "-" * 55)
         print("  💡 Virtual Shelf Mode (Arduino #2 is Optional)")
-        print(f"     Auto-Dispatch: Shelf {self.default_shelf} → Table {self.default_table}")
+        if self.auto_dispatch:
+            print(f"     Auto-Dispatch: Shelf {self.default_shelf} → Table {self.default_table}")
+        else:
+            print("     Mission control: POS touchscreen")
         print("-" * 55)
 
     def stop(self) -> None:
@@ -290,4 +293,3 @@ class VirtualShelfClient:
             self._override_flag = False
             return True
         return False
-
