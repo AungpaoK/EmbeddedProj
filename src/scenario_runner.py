@@ -427,7 +427,7 @@ class ScenarioRunnerNode(Node):
             print(f"  ⚠️ [Motion] เดินหน้าไม่ครบระยะ (ได้ {traveled:.2f}/{distance:.2f}m)")
         return success
 
-    def turn_degrees(self, degrees: float, speed: float = 0.45) -> bool:
+    def turn_degrees(self, degrees: float, speed: float = 0.75) -> bool:
         """หมุนหุ่นยนต์ไปยังเป้าหมายมุม (Closed-loop Heading Control ตาม Odom Yaw)"""
         direction = "ซ้าย (CCW)" if degrees > 0 else "ขวา (CW)"
         target_theta = self.theta + math.radians(degrees)
@@ -475,6 +475,9 @@ class ScenarioRunnerNode(Node):
             self.target_w = turn_w
             if self.mode == "robot":
                 cmd = Twist()
+                # Zero linear velocity makes the bridge command equal-magnitude,
+                # opposite-sign wheel speeds for an in-place tank turn.
+                cmd.linear.x = 0.0
                 # The robot bridge uses INVERT_STEER=1 to preserve the
                 # project's j/l teleop direction mapping. Scenario angles
                 # follow ROS/odom convention (+ = CCW), so compensate here
