@@ -7,6 +7,14 @@ config.py — Robot Physical Constants & Waypoint Map
 ปรับค่า JUNCTION_X, TABLE1_Y, TABLE2_Y ให้ตรงกับสนามจริงก่อนรัน
 """
 
+import os
+
+from env_loader import load_dotenv
+
+
+# Load project-level configuration before reading any environment-backed values.
+load_dotenv()
+
 # ===========================================================
 # Robot Physical Parameters (ซิงค์กับ robotconfig.h)
 # ===========================================================
@@ -26,8 +34,6 @@ SERIAL_BAUD: int = 115200
 MOTION_SERIAL_BAUD: int = 115200
 SERIAL_TIMEOUT: float = 1.0
 
-import os
-
 # ===========================================================
 # Waypoint Coordinates (หน่วย: เมตร)
 #   กำหนดให้ Serve Station = (0, 0) หันหน้าไปทาง +X
@@ -38,6 +44,16 @@ import os
 JUNCTION_X: float = float(os.environ.get("JUNCTION_X", "2.0"))      # m — ระยะทางตรงจากครัวถึงทางแยก
 TABLE1_Y: float = float(os.environ.get("TABLE1_Y", "0.6"))        # m — ระยะทางจากทางแยกถึงโต๊ะ 1 (ซ้าย/เหนือ)
 TABLE2_Y: float = float(os.environ.get("TABLE2_Y", "0.6"))        # m — ระยะทางจากทางแยกถึงโต๊ะ 2 (ขวา/ใต้)
+
+# Raspberry Pi address used by the PC-side ROS 2/RViz helper.
+# Accept the requested lowercase spelling as well as the conventional uppercase
+# spelling and the old PI_IP variable.
+IP_ADDRESS: str = (
+    os.environ.get("IP_ADDRESS")
+    or os.environ.get("ip_address")
+    or os.environ.get("PI_IP")
+    or "172.30.81.226"
+)
 
 WAYPOINTS: dict = {
     "home":      (0.0,        0.0),

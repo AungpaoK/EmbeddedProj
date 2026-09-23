@@ -5,13 +5,19 @@
 set -e
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${ENV_FILE:-${DIR}/.env}" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "${ENV_FILE:-${DIR}/.env}"
+    set +a
+fi
 RVIZ_CONFIG="${1:-${DIR}/src/slam_view.rviz}"
 if [[ "$RVIZ_CONFIG" != /* ]]; then
     RVIZ_CONFIG="/workspace/${RVIZ_CONFIG}"
 elif [[ "$RVIZ_CONFIG" == "${DIR}"* ]]; then
     RVIZ_CONFIG="/workspace/${RVIZ_CONFIG#"${DIR}/"}"
 fi
-PI_IP="${PI_IP:-172.30.81.226}"
+PI_IP="${IP_ADDRESS:-${ip_address:-${PI_IP:-172.30.81.226}}}"
 PEERS_FILE="$HOME/.fastdds_peers.xml"
 
 cat <<EOF > "$PEERS_FILE"

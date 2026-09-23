@@ -7,6 +7,13 @@ set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
+if [[ -f "${ENV_FILE:-${DIR}/.env}" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "${ENV_FILE:-${DIR}/.env}"
+    set +a
+fi
+
 # สร้างแผนที่หากยังไม่มี
 if [ ! -f "maps/restaurant_map.yaml" ] || [ ! -f "maps/restaurant_map.pgm" ]; then
     echo "🗺️ กำลังสร้างไฟล์แผนที่ maps/restaurant_map..."

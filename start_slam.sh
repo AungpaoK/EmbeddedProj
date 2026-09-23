@@ -9,6 +9,12 @@
 
 SESSION="slam"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${ENV_FILE:-${DIR}/.env}" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "${ENV_FILE:-${DIR}/.env}"
+    set +a
+fi
 source "$DIR/src/resolve_lidar_port.sh"
 LIDAR_PORT="$(resolve_lidar_port)" || exit 1
 echo "Using RPLiDAR serial port: $LIDAR_PORT"
