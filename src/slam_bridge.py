@@ -31,6 +31,7 @@ try:
     from geometry_msgs.msg import Twist, TransformStamped
     from nav_msgs.msg import Odometry as OdomMsg
     from sensor_msgs.msg import LaserScan
+    from std_msgs.msg import Bool
     import tf2_ros
     HAS_ROS2 = True
 except ImportError:
@@ -67,6 +68,10 @@ class SlamBridgeNode(Node):
         self._prev_l = 0
         self._prev_r = 0
         self._first_enc = True
+        self._last_encoder_time = 0.0
+        self._arduino_ready = False
+        self._last_not_ready_cmd_log = 0.0
+        self._last_not_ready_status_log = 0.0
 
         # TF Broadcasters
         self._tf_broadcaster = tf2_ros.TransformBroadcaster(self)
@@ -74,6 +79,7 @@ class SlamBridgeNode(Node):
 
         # Publishers & Subscribers
         self._odom_pub = self.create_publisher(OdomMsg, "/odom", 10)
+        self._arduino_ready_pub = self.create_publisher(Bool, "/arduino/ready", 10)
         self._cmd_sub = self.create_subscription(Twist, "/cmd_vel", self._cmd_vel_callback, 10)
         self._scan_pub = self.create_publisher(LaserScan, "/scan_filtered", qos_profile_sensor_data)
         self._scan_sub = self.create_subscription(
@@ -123,15 +129,43 @@ class SlamBridgeNode(Node):
 
         # Timer สำหรับ Publish Odometry และ TF ที่ 20 Hz
         self._timer = self.create_timer(0.05, self._publish_odom_and_tf)
+        self._ready_timer = self.create_timer(0.2, self._publish_arduino_ready)
 
         # Serial Reader Thread (ถ้าต่อ Arduino)
         self._running = True
         if self._ser:
             self._reader_thread = threading.Thread(target=self._serial_read_loop, daemon=True)
             self._reader_thread.start()
-            logger.info("Connected to Arduino #1 Motion Controller.")
+            logger.info("Arduino serial port is open; waiting for valid ENCODER frames.")
         else:
             logger.warning("No Arduino connected. Running with Pure Laser / Static Odom mode.")
+
+    def _publish_arduino_ready(self):
+        """Report healthy Arduino communication only while valid encoder frames are fresh."""
+        now = time.monotonic()
+        ready = bool(
+            self._ser
+            and self._last_encoder_time > 0.0
+            and now - self._last_encoder_time <= 1.0
+        )
+        if ready != self._arduino_ready:
+            if ready:
+                logger.info("Arduino ready: valid ENCODER stream received.")
+            else:
+                logger.error("Arduino not ready: valid ENCODER stream missing or stale.")
+            self._arduino_ready = ready
+        if self._ser and not ready and now - self._last_not_ready_status_log >= 5.0:
+            logger.warning(
+                "No valid ENCODER frames from %s at configured %d baud; "
+                "refusing odometry and non-zero drive commands.",
+                getattr(self._ser, "port", "unknown port"),
+                MOTION_SERIAL_BAUD,
+            )
+            self._last_not_ready_status_log = now
+
+        status = Bool()
+        status.data = ready
+        self._arduino_ready_pub.publish(status)
 
     def _broadcast_static_laser_tf(self):
         half_yaw = self._yaw_offset / 2.0
@@ -178,6 +212,13 @@ class SlamBridgeNode(Node):
     def _cmd_vel_callback(self, msg: Twist):
         """รับความเร็วจาก teleop แล้วส่ง V:left,right ให้ Arduino"""
         if not self._ser:
+            return
+
+        if not self._arduino_ready and (abs(msg.linear.x) > 0.001 or abs(msg.angular.z) > 0.001):
+            now = time.monotonic()
+            if now - self._last_not_ready_cmd_log >= 2.0:
+                logger.error("Ignoring non-zero /cmd_vel: Arduino encoder stream is not healthy.")
+                self._last_not_ready_cmd_log = now
             return
 
         # สลับทิศทางหากตั้งค่า Invert ไว้ (เช่น กด i แล้วถอยหลัง / กด j แล้วเลี้ยวขวา)
@@ -240,6 +281,7 @@ class SlamBridgeNode(Node):
                         if not encoder_seen:
                             logger.info("Received encoder stream from Arduino: %s", line)
                             encoder_seen = True
+                        self._last_encoder_time = time.monotonic()
                         self._update_odometry(l_ticks, r_ticks)
                     else:
                         logger.warning("Malformed encoder line from Arduino: %r", line)
@@ -301,6 +343,12 @@ class SlamBridgeNode(Node):
             )
 
     def _publish_odom_and_tf(self):
+        # Do not publish synthetic zero odometry for a connected-but-silent or
+        # garbled serial device; downstream real-robot preflight uses this as
+        # evidence that encoder feedback is actually arriving.
+        if self._ser and not self._arduino_ready:
+            return
+
         now = self.get_clock().now().to_msg()
         half_theta = self._theta / 2.0
         qz = math.sin(half_theta)
@@ -373,7 +421,10 @@ def main():
     print("\n" + "=" * 55)
     print("  🗺️ SLAM & Teleop Test Bridge Running")
     print(f"  LiDAR Yaw Offset: {yaw_offset}°")
-    print(f"  Motor Control   : {'Active via Arduino' if ser else 'Pure Laser / Mock'}")
+    print(
+        "  Motor Control   : "
+        + ("Waiting for valid Arduino encoder stream" if ser else "Unavailable (no Arduino serial port)")
+    )
     print("=" * 55)
     print("  พร้อมให้ SLAM Toolbox และ Teleop Keyboard เชื่อมต่อแล้ว\n")
 

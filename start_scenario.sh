@@ -126,7 +126,7 @@ if [ "$MODE_CHOICE" == "2" ]; then
                 cat "$BRIDGE_LOG"
                 exit 1
             fi
-            echo "✓ Bridge เปิดพอร์ต Arduino สำเร็จ (PID: $BRIDGE_PID)"
+            echo "✓ เปิด serial port แล้ว; รอ encoder stream ที่ถูกต้องก่อนจึงจะสั่งล้อ (PID: $BRIDGE_PID)"
         else
             echo "✓ ใช้ slam_bridge.py ที่กำลังทำงานอยู่แล้ว"
         fi

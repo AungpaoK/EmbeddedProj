@@ -30,7 +30,7 @@ try:
     from nav_msgs.msg import OccupancyGrid, MapMetaData, Odometry, Path
     from sensor_msgs.msg import LaserScan
     from visualization_msgs.msg import Marker, MarkerArray
-    from std_msgs.msg import ColorRGBA
+    from std_msgs.msg import Bool, ColorRGBA
     import tf2_ros
     from PIL import Image
     import yaml
@@ -73,6 +73,7 @@ class ScenarioRunnerNode(Node):
         # Odometry statistics & heartbeat
         self.odom_count = 0
         self.last_odom_time = 0.0
+        self.arduino_ready = False
 
         # ROS 2 Publishers & Broadcasters
         latched_qos = QoSProfile(
@@ -92,6 +93,9 @@ class ScenarioRunnerNode(Node):
         # แยกความรับผิดชอบระหว่าง Sim Mode และ Real Robot Mode
         if self.mode == "robot":
             self.odom_sub = self.create_subscription(Odometry, "/odom", self._real_odom_callback, 10)
+            self.arduino_ready_sub = self.create_subscription(
+                Bool, "/arduino/ready", self._arduino_ready_callback, 10
+            )
             self.odom_pub = None
             self.scan_pub = None
         else:
@@ -247,6 +251,9 @@ class ScenarioRunnerNode(Node):
             self.map_pub.publish(self.map_grid)
         self._broadcast_static_tf()
         self._publish_scenario_markers()
+
+    def _arduino_ready_callback(self, msg: Bool):
+        self.arduino_ready = msg.data
 
     def _real_odom_callback(self, msg: Odometry):
         self.odom_count += 1
@@ -567,19 +574,22 @@ class ScenarioRunnerNode(Node):
         print("=" * 60)
 
         if self.mode == "robot":
-            print("  ⏳ [Hardware Preflight] กำลังตรวจสอบการเชื่อมต่อกับหุ่นยนต์ (/odom)...")
+            print("  ⏳ [Hardware Preflight] รอข้อมูล ENCODER ที่ถูกต้องจาก Arduino...")
             wait_start = time.time()
-            while rclpy.ok() and self.odom_count < 2:
+            last_wait_notice = wait_start
+            while rclpy.ok() and not (self.arduino_ready and self.odom_count >= 2):
                 time.sleep(0.2)
-                if time.time() - wait_start > 4.0:
-                    print("\n  ⚠️ [Hardware Warning] ยังไม่ได้รับข้อมูลจาก /odom เกิน 4 วินาที!")
-                    print("     คำแนะนำการตรวจสอบ:")
-                    print("     1. slam_bridge.py กำลังทำงานอยู่บน Raspberry Pi หรือไม่")
-                    print("     2. สาย USB ต่อเข้า Arduino #1 เสียบแน่นหรือไม่ (/dev/ttyACM0)")
-                    print("     (กำลังรอสัญญาณต่อไป... หากตรวจพบแล้วจะเริ่มปฏิบัติภารกิจทันที)\n")
-                    wait_start = time.time()
+                now = time.time()
+                if now - wait_start > 12.0:
+                    self.stop_robot()
+                    print("\n  🛑 [Safety Abort] Arduino serial port อาจเปิดอยู่ แต่ยังไม่มี ENCODER frame ที่ถูกต้อง")
+                    print("     ตรวจพอร์ต/baud และ firmware ของ Arduino; ไม่เริ่มเคลื่อนที่จนกว่าจะเห็น ENCODER:L,R\n")
+                    return
+                if now - last_wait_notice > 4.0:
+                    print("  ⚠️ [Hardware Warning] ยังไม่เห็น ENCODER stream ที่ถูกต้อง; กำลังรอ (ไม่สั่งล้อ)")
+                    last_wait_notice = now
 
-            print(f"  ✓ [Hardware Connected] ตรวจพบข้อมูลจาก Arduino แล้ว! (x={self.x:.2f}, y={self.y:.2f}, th={math.degrees(self.theta):.1f}°)\n")
+            print(f"  ✓ [Hardware Connected] รับ encoder stream จาก Arduino แล้ว (x={self.x:.2f}, y={self.y:.2f}, th={math.degrees(self.theta):.1f}°)\n")
 
         # Use the actual odometry pose at mission start as the return target.
         self.start_pose = (self.x, self.y, self.theta)
