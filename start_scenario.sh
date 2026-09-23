@@ -77,6 +77,7 @@ source ~/ros2_ws/install/setup.bash 2>/dev/null || true
 
 BRIDGE_PID=""
 MOTION_PORT="${MOTION_PORT:-/dev/ttyACM0}"
+MOTION_SERIAL_BAUD="${MOTION_SERIAL_BAUD:-115200}"
 BRIDGE_LOG="/tmp/scenario_slam_bridge.log"
 
 cleanup() {
@@ -98,6 +99,7 @@ if [ "$MODE_CHOICE" == "2" ]; then
             echo "🔌 กำลังเปิดใช้งาน SLAM Hardware Bridge เพื่อเชื่อมต่อไปยัง Arduino..."
             : > "$BRIDGE_LOG"
             MOTION_PORT="$MOTION_PORT" \
+            MOTION_SERIAL_BAUD="$MOTION_SERIAL_BAUD" \
             INVERT_ODOM_YAW=0 \
             ODOM_TRACK_WIDTH_FACTOR=1.185 \
             LIDAR_OFFSET_X=0.15 \

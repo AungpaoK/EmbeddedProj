@@ -30,10 +30,10 @@ METERS_PER_TICK: float = (2.0 * 3.14159265 * WHEEL_RADIUS) / TICKS_PER_REV
 MOTION_SERIAL_PORT: str = "/dev/ttyACM0"  # Arduino #1 (Motion)
 SHELF_SERIAL_PORT: str = "none"            # Arduino #2 (Shelf) — ตั้งเป็น "none" เมื่อยังไม่ได้ต่อ (ใช้ VirtualShelf แทน)
 SERIAL_BAUD: int = 115200
-# Keep motion baud separate from shelf baud.  The current Uno firmware is
-# observed on the Pi at 9600 baud; make this configurable so a replacement
-# board/firmware can be switched without editing the bridge.
-MOTION_SERIAL_BAUD: int = int(os.environ.get("MOTION_SERIAL_BAUD", "9600"))
+# Keep motion baud separate from shelf baud.  Arduino_1_Motion.ino uses
+# Serial.begin(115200), so the fallback must match even when tmux does not
+# inherit a project-specific environment variable.
+MOTION_SERIAL_BAUD: int = int(os.environ.get("MOTION_SERIAL_BAUD", "115200"))
 SERIAL_TIMEOUT: float = 1.0
 
 # ===========================================================
