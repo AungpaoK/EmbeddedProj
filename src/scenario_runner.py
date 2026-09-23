@@ -453,7 +453,11 @@ class ScenarioRunnerNode(Node):
             self.target_w = turn_w
             if self.mode == "robot":
                 cmd = Twist()
-                cmd.angular.z = turn_w
+                # The robot bridge uses INVERT_STEER=1 to preserve the
+                # project's j/l teleop direction mapping. Scenario angles
+                # follow ROS/odom convention (+ = CCW), so compensate here
+                # to make the closed-loop command move yaw toward its target.
+                cmd.angular.z = -turn_w
                 self.cmd_pub.publish(cmd)
             time.sleep(0.05)
 
