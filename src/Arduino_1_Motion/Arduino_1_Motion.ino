@@ -20,7 +20,6 @@
  */
 
 #include "robotconfig.h"
-#include "DisplayConfig.h"
 #include "Arduino.h"
 #include "TurnIndicator.h"
 

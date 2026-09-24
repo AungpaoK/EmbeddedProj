@@ -1,7 +1,6 @@
 #include "TurnIndicator.h"
 
 #include <MD_MAX72xx.h>
-#include "DisplayConfig.h"
 #include "robotconfig.h"
 
 namespace {
