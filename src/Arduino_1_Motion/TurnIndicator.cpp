@@ -13,9 +13,16 @@ namespace {
     MAX7219_COUNT
   );
 
+  enum AnimationPhase : uint8_t {
+    PHASE_BUILD,
+    PHASE_HOLD,
+    PHASE_BLANK
+  };
+
   TurnSignal currentSignal = TURN_OFF;
-  bool signalOn = false;
-  unsigned long lastPhaseChange = 0;
+  AnimationPhase animationPhase = PHASE_BUILD;
+  uint8_t animationStep = 0;
+  unsigned long lastAnimationStep = 0;
 
   uint8_t arrowRight[8] = {
     0b00011000,
@@ -65,8 +72,9 @@ void turnIndicatorSet(TurnSignal signal) {
   }
 
   currentSignal = signal;
-  signalOn = false;
-  lastPhaseChange = millis();
+  animationPhase = PHASE_BUILD;
+  animationStep = 0;
+  lastAnimationStep = millis();
   matrix.clear();
   matrix.update();
 }
@@ -77,22 +85,35 @@ void turnIndicatorUpdate() {
   }
 
   unsigned long now = millis();
-  unsigned long phaseDuration = signalOn ? TURN_SIGNAL_ON_MS : TURN_SIGNAL_OFF_MS;
-  if (now - lastPhaseChange < phaseDuration) {
-    return;
-  }
+  unsigned long phaseDuration = TURN_SIGNAL_SEGMENT_MS;
+  if (animationPhase == PHASE_HOLD) phaseDuration = TURN_SIGNAL_HOLD_MS;
+  if (animationPhase == PHASE_BLANK) phaseDuration = TURN_SIGNAL_OFF_MS;
+  if (now - lastAnimationStep < phaseDuration) return;
 
-  lastPhaseChange = now;
-  signalOn = !signalOn;
-  matrix.clear();
-  if (signalOn) {
-    for (uint8_t module = 0; module < MAX7219_COUNT; module++) {
+  lastAnimationStep = now;
+  switch (animationPhase) {
+    case PHASE_BUILD: {
+      uint8_t module = animationStep;
       if (currentSignal == TURN_RIGHT) {
         drawArrow(module, arrowRight);
       } else {
         drawArrow(MAX7219_COUNT - 1 - module, arrowLeft);
       }
+      animationStep++;
+      if (animationStep >= MAX7219_COUNT) animationPhase = PHASE_HOLD;
+      matrix.update();
+      break;
     }
+
+    case PHASE_HOLD:
+      matrix.clear();
+      matrix.update();
+      animationPhase = PHASE_BLANK;
+      break;
+
+    case PHASE_BLANK:
+      animationStep = 0;
+      animationPhase = PHASE_BUILD;
+      break;
   }
-  matrix.update();
 }

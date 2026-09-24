@@ -409,8 +409,8 @@ void updateTurnIndicator() {
         signal = (cmdTarget >= 0.0f) ? TURN_LEFT : TURN_RIGHT;
     } else if (currentCmd == CMD_VELOCITY) {
         const float difference = targetRightSpeed - targetLeftSpeed;
-        if (difference > 0.02f) signal = TURN_LEFT;
-        else if (difference < -0.02f) signal = TURN_RIGHT;
+        if (difference > 0.005f) signal = TURN_LEFT;
+        else if (difference < -0.005f) signal = TURN_RIGHT;
     }
     turnIndicatorSet(signal);
     turnIndicatorUpdate();
