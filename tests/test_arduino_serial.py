@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from arduino_serial import parse_encoder_line, reset_and_wait_for_encoder
+from arduino_serial import parse_encoder_line, reset_and_wait_for_encoder, wait_for_encoder
 
 
 class FakeClock:
@@ -48,11 +48,40 @@ class FakeSerial:
     def reset_input_buffer(self):
         self.active.clear()
 
+    @property
+    def in_waiting(self):
+        return sum(len(chunk) for chunk in self.active)
+
+    def read(self, size=1):
+        result = bytearray()
+        while self.active and len(result) < size:
+            chunk = self.active.popleft()
+            needed = size - len(result)
+            result.extend(chunk[:needed])
+            if len(chunk) > needed:
+                self.active.appendleft(chunk[needed:])
+        return bytes(result)
+
     def readline(self):
         if self.active:
             return self.active.popleft()
         self.clock.sleep(0.01)
         return b""
+
+
+class ContinuousGarbageSerial:
+    """Serial stream that always has bytes but never sends a newline."""
+
+    def __init__(self, clock):
+        self.clock = clock
+
+    @property
+    def in_waiting(self):
+        return 1
+
+    def read(self, size=1):
+        self.clock.sleep(0.005)
+        return b"x"
 
 
 class ArduinoSerialStartupTests(unittest.TestCase):
@@ -106,6 +135,21 @@ class ArduinoSerialStartupTests(unittest.TestCase):
         self.assertTrue(all(not result.received_data for result in outcomes))
         self.assertTrue(all(result.frame is None for result in outcomes))
         self.assertEqual(ser.pulses, 2)
+
+    def test_deadline_bounds_continuous_data_without_newlines(self):
+        ser = ContinuousGarbageSerial(self.clock)
+
+        outcome = wait_for_encoder(
+            ser,
+            timeout_seconds=0.03,
+            monotonic=self.clock.monotonic,
+            sleep=self.clock.sleep,
+        )
+
+        self.assertTrue(outcome.received_data)
+        self.assertIsNone(outcome.frame)
+        self.assertLessEqual(self.clock.now, 0.030001)
+        self.assertTrue(outcome.samples[0].startswith("unterminated serial data:"))
 
     def test_encoder_parser_requires_exactly_two_integer_ticks(self):
         self.assertEqual(parse_encoder_line(b"ENCODER:-10,23\r\n"), (-10, 23))
