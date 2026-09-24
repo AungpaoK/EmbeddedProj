@@ -173,3 +173,53 @@ class Odometry:
                 self.theta -= 2.0 * math.pi
             while self.theta < -math.pi:
                 self.theta += 2.0 * math.pi
+
+
+class RosOdometry:
+    """Odometry view backed by the ``/odom`` topic published by slam_bridge."""
+
+    def __init__(self, ros_node):
+        self._ros_node = ros_node
+        self._reset_offset: tuple[float, float, float] | None = None
+
+    @property
+    def pose(self) -> tuple[float, float, float]:
+        pose = self._ros_node.latest_odom_pose
+        if pose is None:
+            return 0.0, 0.0, 0.0
+
+        x, y, theta = pose
+        if self._reset_offset is None:
+            return pose
+
+        ox, oy, otheta = self._reset_offset
+        return x - ox, y - oy, _normalize_angle(theta - otheta)
+
+    @property
+    def theta_deg(self) -> float:
+        return math.degrees(self.pose[2])
+
+    def start(self) -> None:
+        logger.info("[Odometry/ROS] Using /odom from slam_bridge.")
+
+    def stop(self) -> None:
+        pass
+
+    def reset(self) -> None:
+        pose = self._ros_node.latest_odom_pose
+        if pose is not None:
+            self._reset_offset = pose
+        logger.info("[Odometry/ROS] Local pose origin reset.")
+
+    def distance_to(self, target_x: float, target_y: float) -> float:
+        x, y, _ = self.pose
+        return math.hypot(target_x - x, target_y - y)
+
+    def angle_to_deg(self, target_x: float, target_y: float) -> float:
+        x, y, theta = self.pose
+        desired = math.atan2(target_y - y, target_x - x)
+        return math.degrees(_normalize_angle(desired - theta))
+
+
+def _normalize_angle(angle: float) -> float:
+    return (angle + math.pi) % (2.0 * math.pi) - math.pi

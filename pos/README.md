@@ -24,7 +24,7 @@ confirmation. A browser reload reconnects to the current controller state.
 
 On a Pi configured for automatic desktop login, use the user-level systemd
 unit. It starts with the kiosk user's desktop session and does not require a
-root-owned unit or lingering. Replace __POS_PROJECT_DIR__ with the absolute
+root-owned unit or lingering. Replace **POS_PROJECT_DIR** with the absolute
 repository path in deploy/food-delivery-pos.user.service.example, then run:
 
     mkdir -p ~/.config/systemd/user ~/.config/autostart
@@ -40,10 +40,11 @@ desktop entry starts deploy/start_pos_kiosk.sh after a short delay. It guards
 against duplicate launches, logs to /tmp/pos_kiosk_autostart.log, waits for the
 local health endpoint, and restarts the browser if it exits. The browser
 launcher checks for chromium, chromium-browser, then Firefox. Chromium runs in
-kiosk mode. Firefox uses a separate POS profile and opens a new window; on the
-Ubuntu Pi's Snap Firefox, kiosk mode stayed alive but did not navigate to the
-local POS URL, while a normal window loaded it successfully. If the executable
-has a different name, set POS_BROWSER near the top of deploy/pos_kiosk.sh.
+kiosk mode. Firefox uses a separate POS profile and launches in kiosk/private
+window mode with the POS URL passed explicitly. On the Ubuntu Pi's Snap Firefox,
+using only the homepage preference produced a blank kiosk window. If the
+executable has a different name, set POS_BROWSER near the top of
+deploy/pos_kiosk.sh.
 
 Ubuntu must be configured to automatically log in to the kiosk account so its
 user service and desktop autostart run after boot. The account needs access to

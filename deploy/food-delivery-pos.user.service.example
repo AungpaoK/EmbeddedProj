@@ -6,6 +6,7 @@ After=default.target
 Type=simple
 WorkingDirectory=__POS_PROJECT_DIR__
 Environment=POS_PORT=8765
+Environment=MOTION_BACKEND=ros
 ExecStart=/bin/bash __POS_PROJECT_DIR__/deploy/run_pos_controller.sh
 Restart=on-failure
 RestartSec=3

@@ -9,6 +9,7 @@ main.py — Food Delivery Robot Entry Point (Unified ROS 2 Hybrid System)
     python3 main.py
 
 ตัวเลือก Environment Variable:
+    MOTION_BACKEND     — serial (เดิม) หรือ ros (ให้ slam_bridge ถือ Arduino)
     MOTION_PORT        — Serial port ของ Arduino #1  (default: /dev/ttyACM0)
     SHELF_PORT         — Serial port ของ Arduino #2  (default: none)
     BAUD_RATE          — Baud rate ทั้งสอง port       (default: 115200)
@@ -35,8 +36,8 @@ from config import (
     SERIAL_BAUD,
     SERIAL_TIMEOUT,
 )
-from odometry import Odometry
-from motion_client import MotionClient
+from odometry import Odometry, RosOdometry
+from motion_client import MotionClient, RosMotionClient
 from shelf_client import ShelfClient, VirtualShelfClient
 from delivery_fsm import DeliveryFSM
 from pos_server import PosBridge, PosServer
@@ -48,7 +49,9 @@ try:
     import rclpy
     from rclpy.node import Node
     from sensor_msgs.msg import LaserScan
-    from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped
+    from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped, Twist
+    from nav_msgs.msg import Odometry as RosOdomMsg
+    from std_msgs.msg import Bool
     HAS_ROS2 = True
 except ImportError:
     HAS_ROS2 = False
@@ -113,6 +116,9 @@ if HAS_ROS2:
             super().__init__("delivery_robot_node")
             self._safety = safety_guard
             self.latest_slam_pose = None
+            self.latest_odom_pose = None
+            self.motion_ready = False
+            self._cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
 
             # 1. Subscribe /scan จาก sllidar_ros2
             self._scan_sub = self.create_subscription(
@@ -129,6 +135,18 @@ if HAS_ROS2:
                 self._pose_callback,
                 10,
             )
+            self._odom_sub = self.create_subscription(
+                RosOdomMsg,
+                "/odom",
+                self._odom_callback,
+                10,
+            )
+            self._ready_sub = self.create_subscription(
+                Bool,
+                "/arduino/ready",
+                self._ready_callback,
+                10,
+            )
             self.get_logger().info("ROS 2 DeliveryRobotRosNode initialized.")
 
         def _pose_callback(self, msg: PoseWithCovarianceStamped):
@@ -139,6 +157,31 @@ if HAS_ROS2:
             cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
             yaw = math.atan2(siny_cosp, cosy_cosp)
             self.latest_slam_pose = (pos.x, pos.y, yaw)
+
+        def _odom_callback(self, msg: RosOdomMsg):
+            pos = msg.pose.pose.position
+            q = msg.pose.pose.orientation
+            siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+            cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+            self.latest_odom_pose = (pos.x, pos.y, math.atan2(siny_cosp, cosy_cosp))
+
+        def _ready_callback(self, msg: Bool):
+            self.motion_ready = bool(msg.data)
+
+        def publish_cmd_vel(
+            self,
+            linear_v: float,
+            angular_w: float,
+            *,
+            allow_when_not_ready: bool = False,
+        ) -> bool:
+            if not self.motion_ready and not allow_when_not_ready:
+                return False
+            msg = Twist()
+            msg.linear.x = float(linear_v)
+            msg.angular.z = float(angular_w)
+            self._cmd_vel_pub.publish(msg)
+            return True
 
 
 # ===========================================================
@@ -164,9 +207,15 @@ def main() -> None:
     _setup_logging()
     logger = logging.getLogger(__name__)
 
-    # --- Read port overrides from env & Auto-detect ---
+    # --- Read runtime backend and port overrides ---
+    motion_backend = os.environ.get("MOTION_BACKEND", "serial").strip().lower()
+    if motion_backend not in {"serial", "ros"}:
+        logger.error("Unsupported MOTION_BACKEND=%r; use 'serial' or 'ros'.", motion_backend)
+        sys.exit(2)
+
     motion_port = os.environ.get("MOTION_PORT", MOTION_SERIAL_PORT)
-    motion_port = _find_motion_port(motion_port)
+    if motion_backend == "serial":
+        motion_port = _find_motion_port(motion_port)
     shelf_port  = os.environ.get("SHELF_PORT",  SHELF_SERIAL_PORT)
     baud        = int(os.environ.get("BAUD_RATE", SERIAL_BAUD))
     yaw_offset  = float(os.environ.get("LIDAR_YAW_OFFSET", "0.0"))
@@ -175,26 +224,14 @@ def main() -> None:
     logger.info("=" * 55)
     logger.info("  Food Delivery Robot — Unified ROS 2 Hybrid")
     logger.info("=" * 55)
-    logger.info(f"  Motion Arduino   : {motion_port}")
+    logger.info(
+        "  Motion backend   : %s",
+        "ROS topics (/cmd_vel, /odom)" if motion_backend == "ros" else f"serial ({motion_port})",
+    )
     logger.info(f"  Shelf Arduino    : {shelf_port} (Optional)")
     logger.info(f"  LiDAR Yaw Offset : {yaw_offset}°")
     logger.info(f"  LiDAR Stop Dist  : {stop_dist} m")
     logger.info(f"  ROS 2 Status     : {'Available' if HAS_ROS2 else 'Standalone / No ROS 2'}")
-
-    # --- Open Serial Connections ---
-    motion_ser = _open_serial(motion_port, baud, SERIAL_TIMEOUT, "Motion")
-    shelf_ser  = _open_serial(shelf_port,  baud, SERIAL_TIMEOUT, "Shelf", optional=True)
-
-    # --- Instantiate Subsystems ---
-    odometry = Odometry(motion_ser)
-    motion   = MotionClient(motion_ser)
-
-    # Shelf Subsystem (Hardware or Virtual Fallback)
-    if shelf_ser is not None:
-        shelf = ShelfClient(shelf_ser)
-    else:
-        logger.info("[main] Arduino #2 (Shelf) not connected. Running with VirtualShelfClient.")
-        shelf = VirtualShelfClient(auto_dispatch=False)
 
     # --- LiDAR Safety Guard ---
     safety_guard = LidarSafetyGuard(
@@ -204,9 +241,37 @@ def main() -> None:
         yaw_offset_deg=yaw_offset,
     )
 
-    # --- ROS 2 Node Spin (Optional) ---
+    # --- Start the selected motion transport ---
     ros_node = None
-    if HAS_ROS2:
+    ros_thread = None
+    if motion_backend == "ros":
+        if not HAS_ROS2:
+            logger.critical("MOTION_BACKEND=ros requires ROS 2 (rclpy and message packages).")
+            sys.exit(1)
+        rclpy.init()
+        ros_node = DeliveryRobotRosNode(safety_guard)
+        ros_thread = threading.Thread(target=rclpy.spin, args=(ros_node,), daemon=True)
+        ros_thread.start()
+        motion_ser = None
+        motion = RosMotionClient(ros_node)
+        odometry = RosOdometry(ros_node)
+    else:
+        motion_ser = _open_serial(motion_port, baud, SERIAL_TIMEOUT, "Motion")
+        motion = MotionClient(motion_ser)
+        odometry = Odometry(motion_ser)
+
+    # Shelf serial remains owned by main.py; it is a separate optional device.
+    shelf_ser = _open_serial(shelf_port, baud, SERIAL_TIMEOUT, "Shelf", optional=True)
+
+    # Shelf Subsystem (Hardware or Virtual Fallback)
+    if shelf_ser is not None:
+        shelf = ShelfClient(shelf_ser)
+    else:
+        logger.info("[main] Arduino #2 (Shelf) not connected. Running with VirtualShelfClient.")
+        shelf = VirtualShelfClient(auto_dispatch=False)
+
+    # --- ROS 2 Node Spin (Optional for serial backend) ---
+    if HAS_ROS2 and ros_node is None:
         rclpy.init()
         ros_node = DeliveryRobotRosNode(safety_guard)
         ros_thread = threading.Thread(target=rclpy.spin, args=(ros_node,), daemon=True)

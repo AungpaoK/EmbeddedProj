@@ -42,10 +42,11 @@ case "$(basename "$BROWSER")" in
             FIREFOX_PROFILE="${XDG_DATA_HOME:-$HOME/.local/share}/food-delivery-pos/firefox-profile"
         fi
         mkdir -p "$FIREFOX_PROFILE"
+        python3 -c 'import json, pathlib, sys; pathlib.Path(sys.argv[1]).write_text("user_pref(\"browser.startup.homepage\", " + json.dumps(sys.argv[2]) + ");\nuser_pref(\"browser.startup.page\", 1);\n", encoding="utf-8")' "$FIREFOX_PROFILE/user.js" "$POS_URL"
         if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
             export MOZ_ENABLE_WAYLAND="${MOZ_ENABLE_WAYLAND:-1}"
         fi
-        exec "$BROWSER" --no-remote --profile "$FIREFOX_PROFILE" --new-window "$POS_URL"
+        exec "$BROWSER" --no-remote --profile "$FIREFOX_PROFILE" --kiosk --private-window "$POS_URL"
         ;;
     *)
         exec "$BROWSER" \

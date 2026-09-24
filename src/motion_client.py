@@ -175,3 +175,45 @@ class MotionClient:
 
         logger.error(f"[Motion] Timeout waiting for STATUS:DONE (cmd={cmd.strip()})")
         return False
+
+
+class RosMotionClient:
+    """Motion client that delegates the Arduino serial link to slam_bridge.
+
+    ``slam_bridge.py`` is the sole owner of ``/dev/ttyACM0``.  This adapter
+    keeps the existing waypoint-controller interface while sending ROS
+    ``/cmd_vel`` messages instead of opening the Arduino serial port.
+    """
+
+    def __init__(self, ros_node):
+        self._ros_node = ros_node
+
+    def forward(self, distance_m: float) -> bool:
+        logger.error(
+            "[Motion/ROS] forward() is not supported directly; "
+            "use WaypointController.drive_continuous()."
+        )
+        return False
+
+    def turn(self, degrees: float) -> bool:
+        logger.error(
+            "[Motion/ROS] turn() is not supported directly; "
+            "use WaypointController.drive_continuous()."
+        )
+        return False
+
+    def drive_continuous(self, linear_v: float, angular_w: float, wheel_base: float = 0.343) -> bool:
+        if not self._ros_node.motion_ready:
+            return False
+        return self._ros_node.publish_cmd_vel(linear_v, angular_w)
+
+    def stop_continuous(self) -> bool:
+        return self._ros_node.publish_cmd_vel(0.0, 0.0, allow_when_not_ready=True)
+
+    def stop(self) -> None:
+        self.stop_continuous()
+
+    def set_wheel_velocities(self, v_left: float, v_right: float) -> bool:
+        linear_v = (v_left + v_right) / 2.0
+        angular_w = (v_right - v_left) / 0.343
+        return self.drive_continuous(linear_v, angular_w, wheel_base=0.343)
