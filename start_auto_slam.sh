@@ -52,7 +52,7 @@ tmux send-keys -t "$SESSION:0.0" \
   "source /opt/ros/jazzy/setup.bash && source ~/ros2_ws/install/setup.bash 2>/dev/null && echo '=== [1] Starting RPLiDAR on $LIDAR_PORT ===' && ros2 launch sllidar_ros2 sllidar_a1_launch.py serial_port:=$LIDAR_PORT serial_baudrate:=115200" C-m
 
 # ------------------------------------------------------------------------------
-# ช่องที่ 2 (บนขวา - Pane 1): SLAM Bridge (รอ 2 วินาที)
+# ช่องที่ 2 (บนขวา - Pane 1): SLAM Bridge (จัดการ DTR และรอ ENCODER เอง)
 # ------------------------------------------------------------------------------
 tmux send-keys -t "$SESSION:0.1" \
   "source /opt/ros/jazzy/setup.bash && cd ~/EmbeddedProj/src && sleep 2 && echo '=== [2] Starting SLAM Bridge on $MOTION_PORT at $MOTION_SERIAL_BAUD baud ===' && MOTION_PORT=$MOTION_PORT MOTION_SERIAL_BAUD=$MOTION_SERIAL_BAUD INVERT_LINEAR=1 INVERT_STEER=1 INVERT_ODOM_YAW=0 ODOM_TRACK_WIDTH_FACTOR=1.185 LIDAR_OFFSET_X=0.15 LIDAR_OFFSET_Y=0.0 LIDAR_YAW_OFFSET=180 SELF_FILTER_RADIUS=0.195 python3 slam_bridge.py" C-m

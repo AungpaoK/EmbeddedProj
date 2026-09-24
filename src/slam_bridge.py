@@ -46,9 +46,15 @@ from config import (
     MOTION_SERIAL_BAUD,
     SERIAL_TIMEOUT,
 )
+from arduino_serial import reset_and_wait_for_encoder
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("SLAMBridge")
+
+ARDUINO_DTR_ATTEMPTS = 2
+ARDUINO_DTR_PULSE_SECONDS = 0.25
+ARDUINO_ENCODER_WAIT_SECONDS = 10.0
+ARDUINO_STARTUP_READ_TIMEOUT = 0.1
 
 
 class SlamBridgeNode(Node):
@@ -136,7 +142,9 @@ class SlamBridgeNode(Node):
         if self._ser:
             self._reader_thread = threading.Thread(target=self._serial_read_loop, daemon=True)
             self._reader_thread.start()
-            logger.info("Arduino serial port is open; waiting for valid ENCODER frames.")
+            logger.info(
+                "Arduino serial port is open; motion stays disabled until valid ENCODER frames are fresh."
+            )
         else:
             logger.warning("No Arduino connected. Running with Pure Laser / Static Odom mode.")
 
@@ -409,11 +417,63 @@ def main():
         for p in dict.fromkeys([port, "/dev/ttyACM0", "/dev/ttyACM1"]):
             if os.path.exists(p):
                 try:
-                    ser = serial.Serial(p, MOTION_SERIAL_BAUD, timeout=SERIAL_TIMEOUT)
+                    ser = serial.Serial(
+                        p,
+                        MOTION_SERIAL_BAUD,
+                        timeout=min(SERIAL_TIMEOUT, ARDUINO_STARTUP_READ_TIMEOUT),
+                    )
                     logger.info(f"Opened Arduino Motion Port on {p}")
                     break
                 except Exception as e:
                     logger.warning(f"Could not open {p}: {e}")
+
+    if ser:
+        attempts = reset_and_wait_for_encoder(
+            ser,
+            timeout_seconds=ARDUINO_ENCODER_WAIT_SECONDS,
+            attempts=ARDUINO_DTR_ATTEMPTS,
+            dtr_pulse_seconds=ARDUINO_DTR_PULSE_SECONDS,
+        )
+        ready_attempt = next((i for i, result in enumerate(attempts, start=1) if result.frame), None)
+        for attempt_number, result in enumerate(attempts, start=1):
+            if result.reset_error:
+                logger.warning("Arduino DTR reset attempt %d failed: %s", attempt_number, result.reset_error)
+            if result.frame:
+                logger.info(
+                    "Arduino startup handshake received ENCODER:%d,%d at %d baud on DTR attempt %d/%d.",
+                    result.frame[0],
+                    result.frame[1],
+                    MOTION_SERIAL_BAUD,
+                    attempt_number,
+                    ARDUINO_DTR_ATTEMPTS,
+                )
+                break
+            if result.received_data:
+                logger.warning(
+                    "Arduino sent serial data at %d baud but no valid ENCODER frame arrived on DTR "
+                    "attempt %d/%d; sample=%r.",
+                    MOTION_SERIAL_BAUD,
+                    attempt_number,
+                    ARDUINO_DTR_ATTEMPTS,
+                    result.samples[0] if result.samples else "<empty line>",
+                )
+            else:
+                logger.warning(
+                    "No serial data from Arduino at %d baud during DTR attempt %d/%d.",
+                    MOTION_SERIAL_BAUD,
+                    attempt_number,
+                    ARDUINO_DTR_ATTEMPTS,
+                )
+            if attempt_number < len(attempts):
+                logger.info("Pulsing Arduino DTR and retrying the encoder handshake once.")
+
+        if ready_attempt is None:
+            logger.error(
+                "Arduino startup handshake failed after %d DTR attempts; SLAM will continue, "
+                "but motion remains disabled until valid ENCODER frames arrive.",
+                len(attempts),
+            )
+        ser.timeout = SERIAL_TIMEOUT
 
     yaw_offset = float(os.environ.get("LIDAR_YAW_OFFSET", "0.0"))
     node = SlamBridgeNode(ser=ser, yaw_offset_deg=yaw_offset)
