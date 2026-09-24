@@ -23,7 +23,7 @@ constexpr uint8_t MAX7219_BRIGHTNESS = 2;
 
 // Demo mode cycles right five times, then left five times, indefinitely.
 // Set false and reflash to select turn signals from motion commands.
-constexpr bool TURN_INDICATOR_DEMO_MODE = true;
+constexpr bool TURN_INDICATOR_DEMO_MODE = false;
 constexpr uint8_t TURN_INDICATOR_DEMO_CYCLES_PER_SIDE = 5;
 
 constexpr unsigned long TURN_SIGNAL_SEGMENT_MS = 120;
@@ -50,4 +50,4 @@ constexpr unsigned long TURN_SIGNAL_CYCLE_MS =
 // Motor Variable
 #define TICKS_PER_REV 1920.0
 
-#endif  // ROBOTCONFIG_H
+#endif // ROBOTCONFIG_H
