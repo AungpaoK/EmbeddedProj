@@ -8,7 +8,7 @@ from urllib.request import Request, urlopen
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from pos_server import PosBridge, PosServer  # noqa: E402
+from pos_server import PosBridge, PosServer
 
 
 class PosServerTests(unittest.TestCase):

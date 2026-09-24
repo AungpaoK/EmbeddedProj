@@ -8,8 +8,8 @@ from queue import Empty, Queue
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from delivery_fsm import DeliveryFSM, State  # noqa: E402
-from pos_server import PosBridge  # noqa: E402
+from delivery_fsm import DeliveryFSM, State
+from pos_server import PosBridge
 
 
 class FakeMotion:
