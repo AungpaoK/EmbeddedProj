@@ -188,8 +188,7 @@ class PosRequestHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         origin = self.headers.get("Origin")
-        expected_origin = f"http://127.0.0.1:{self.server.server_port}"
-        if origin != expected_origin:
+        if not self._is_local_origin(origin):
             self._send_json(403, {"error": "origin ไม่ได้รับอนุญาต"})
             return
 
@@ -216,6 +215,30 @@ class PosRequestHandler(BaseHTTPRequestHandler):
         except Exception:
             logger.exception("Unhandled POS request error")
             self._send_json(500, {"error": "เกิดข้อผิดพลาดภายในระบบ"})
+
+    @staticmethod
+    def _is_local_origin(origin: str | None) -> bool:
+        """Allow browser pages served through a loopback SSH forward.
+
+        The browser's local forwarded port can differ from the server port,
+        and users may open either localhost or 127.0.0.1. The server itself
+        remains bound to loopback, and non-loopback web origins stay blocked.
+        """
+        if not origin:
+            return False
+        try:
+            parsed = urlsplit(origin)
+            return (
+                parsed.scheme == "http"
+                and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+                and parsed.username is None
+                and parsed.password is None
+                and parsed.path == ""
+                and parsed.query == ""
+                and parsed.fragment == ""
+            )
+        except ValueError:
+            return False
 
     def _read_json(self) -> object:
         try:
