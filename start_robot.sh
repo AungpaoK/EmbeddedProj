@@ -177,7 +177,13 @@ if [[ -z "$POS_XAUTHORITY" ]]; then
     fi
 fi
 if [[ -z "$POS_XAUTHORITY" ]]; then
-    for candidate in "${HOME}/.Xauthority" "${POS_XDG_RUNTIME_DIR}/gdm/Xauthority"; do
+    # Wayland desktop sessions commonly create a temporary XWayland cookie
+    # under XDG_RUNTIME_DIR (for example, .mutter-Xwaylandauth.*). An SSH
+    # shell does not inherit that path, so discover it for local kiosk apps.
+    for candidate in \
+        "${HOME}/.Xauthority" \
+        "${POS_XDG_RUNTIME_DIR}"/.mutter-Xwaylandauth.* \
+        "${POS_XDG_RUNTIME_DIR}/gdm/Xauthority"; do
         if [[ -r "$candidate" ]]; then
             POS_XAUTHORITY="$candidate"
             break

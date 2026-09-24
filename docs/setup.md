@@ -134,3 +134,12 @@ bash ~/EmbeddedProj/start_robot.sh stop
 หาก kiosk ไม่ปรากฏบนจอ ให้ยืนยันก่อนว่า Pi เข้าสู่ desktop session แล้ว และใช้ SSH ด้วยบัญชีเดียวกับ desktop จากนั้นตรวจ `/tmp/pos_kiosk_autostart.log` และค่า `POS_DISPLAY`/`POS_XAUTHORITY`
 
 หาก Firefox แจ้งว่าเปิดอยู่แล้วแต่ไม่ตอบสนอง ให้ปิดหน้าต่างหรือโปรเซส Firefox เก่าบน Pi หนึ่งครั้ง แล้วเริ่ม kiosk ใหม่ ตัวเปิดปัจจุบันสร้างโปรไฟล์ชั่วคราวแยกในแต่ละครั้ง เพื่อลดปัญหา lock จากรอบก่อน
+
+หาก Firefox kiosk เปิดเป็นหน้าดำบน desktop ที่ใช้ Wayland ให้ลองบังคับ Firefox Snap ผ่าน XWayland โดยเพิ่มค่านี้ใน `.env`:
+
+```dotenv
+MOZ_ENABLE_WAYLAND=0
+DISABLE_WAYLAND=1
+```
+
+launcher จะค้นหา Xauthority ของ Mutter XWayland ใน `XDG_RUNTIME_DIR` ให้ด้วย (เช่น `.mutter-Xwaylandauth.*`) เพื่อให้โปรเซสที่เริ่มผ่าน SSH ได้รับอนุญาตให้เปิดหน้าต่างบนจอ หากยังเปิดไม่ได้ ให้ตรวจบรรทัด `Authorization required` ใน log และยืนยันว่า `POS_DISPLAY` ตรงกับ display ที่ XWayland ใช้ จากนั้นหยุดและเริ่ม stack ใหม่
