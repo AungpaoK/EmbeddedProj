@@ -24,7 +24,27 @@ if ! flock -n 200; then
 fi
 
 export POS_URL="${POS_URL:-http://127.0.0.1:8765/}"
-export DISPLAY="${DISPLAY:-:0}"
+export DISPLAY="${POS_DISPLAY:-${DISPLAY:-:0}}"
+export XDG_RUNTIME_DIR="${POS_XDG_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
+if [[ -n "${POS_XAUTHORITY:-}" ]]; then
+    export XAUTHORITY="$POS_XAUTHORITY"
+elif [[ -n "${SSH_CONNECTION:-}" ]]; then
+    # Ignore an SSH-forwarded X cookie when opening the Pi's local display.
+    unset XAUTHORITY
+fi
+if [[ -z "${XAUTHORITY:-}" ]]; then
+    for candidate in "$HOME/.Xauthority" "$XDG_RUNTIME_DIR/gdm/Xauthority"; do
+        if [[ -r "$candidate" ]]; then
+            export XAUTHORITY="$candidate"
+            break
+        fi
+    done
+fi
+if [[ -n "${POS_WAYLAND_DISPLAY:-}" ]]; then
+    export WAYLAND_DISPLAY="$POS_WAYLAND_DISPLAY"
+elif [[ -n "${SSH_CONNECTION:-}" ]]; then
+    unset WAYLAND_DISPLAY
+fi
 if [[ -z "${WAYLAND_DISPLAY:-}" && -n "${XDG_RUNTIME_DIR:-}" ]]; then
     if [[ -e "$XDG_RUNTIME_DIR/wayland-0" ]]; then
         export WAYLAND_DISPLAY=wayland-0
@@ -33,7 +53,12 @@ if [[ -z "${WAYLAND_DISPLAY:-}" && -n "${XDG_RUNTIME_DIR:-}" ]]; then
     fi
 fi
 
-log "POS kiosk supervisor started (DISPLAY=$DISPLAY WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset} URL=$POS_URL)"
+log "POS kiosk supervisor started (DISPLAY=$DISPLAY XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset} URL=$POS_URL)"
+if command -v xset >/dev/null 2>&1; then
+    xset s off >/dev/null 2>&1 || true
+    xset -dpms >/dev/null 2>&1 || true
+    xset dpms force on >/dev/null 2>&1 || true
+fi
 while true; do
     log "Launching POS browser"
     /bin/bash "$SCRIPT_DIR/pos_kiosk.sh" >> "$LOG_FILE" 2>&1
