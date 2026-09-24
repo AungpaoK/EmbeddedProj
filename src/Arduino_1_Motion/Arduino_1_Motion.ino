@@ -11,6 +11,7 @@
  *
  * Serial Protocol:
  *   รับ:  FORWARD:<distance_m>\n  |  TURN:<degrees>\n  |  STOP\n
+ *         LIGHTTEST:LEFT\n  |  LIGHTTEST:RIGHT\n  |  LIGHTTEST:OFF\n
  *   ส่ง:  STATUS:DONE\n  |  STATUS:ERROR\n  |  ENCODER:<L>,<R>\n
  *
  * Pin Map (อ้างอิง robotconfig.h):
@@ -182,6 +183,8 @@ const unsigned long VELOCITY_TIMEOUT_MS = 300;  // ตัดมอเตอร�
 unsigned long lastControlTime  = 0;
 unsigned long lastEncoderPrint = 0;
 bool motionFaultLatched = false;
+bool indicatorTestMode = false;
+TurnSignal indicatorTestSignal = TURN_OFF;
 
 // ============================================================
 // Encoder ISR (PCINT1 — Port C)
@@ -283,15 +286,51 @@ bool encoderStallDetected() {
 // Serial Command Parser
 // ============================================================
 void parseSerialCommand(const String &line) {
+    if (line.startsWith("LIGHTTEST:")) {
+        String direction = line.substring(10);
+        if (direction == "LEFT" || direction == "RIGHT") {
+            driveMotors(0, 0);
+            currentCmd = CMD_IDLE;
+            targetLeftSpeed = 0.0f;
+            targetRightSpeed = 0.0f;
+            indicatorTestMode = true;
+            indicatorTestSignal = (direction == "LEFT") ? TURN_LEFT : TURN_RIGHT;
+            Serial.println("STATUS:LIGHTTEST");
+        } else if (direction == "OFF") {
+            driveMotors(0, 0);
+            currentCmd = CMD_IDLE;
+            targetLeftSpeed = 0.0f;
+            targetRightSpeed = 0.0f;
+            indicatorTestMode = false;
+            indicatorTestSignal = TURN_OFF;
+            Serial.println("STATUS:LIGHTTEST:OFF");
+        } else {
+            Serial.println("STATUS:ERROR");
+        }
+        return;
+    }
+
     if (line == "STOP") {
         driveMotors(0, 0);
         currentCmd = CMD_IDLE;
         targetLeftSpeed = 0.0f;
         targetRightSpeed = 0.0f;
         motionFaultLatched = false;
+        indicatorTestMode = false;
+        indicatorTestSignal = TURN_OFF;
         pidLeft.reset();
         pidRight.reset();
         Serial.println("STATUS:DONE");
+        return;
+    }
+
+    // In light-test mode, keep the wheels stopped and reject drive commands.
+    if (indicatorTestMode) {
+        driveMotors(0, 0);
+        currentCmd = CMD_IDLE;
+        targetLeftSpeed = 0.0f;
+        targetRightSpeed = 0.0f;
+        Serial.println("STATUS:LIGHTTEST");
         return;
     }
 
@@ -363,13 +402,15 @@ void parseSerialCommand(const String &line) {
 // Map the commanded motion to the rear LED-matrix turn signal.
 void updateTurnIndicator() {
     TurnSignal signal = TURN_OFF;
-    if (currentCmd == CMD_TURN) {
+    if (indicatorTestMode) {
+        signal = indicatorTestSignal;
+    } else if (currentCmd == CMD_TURN) {
         // TURN:+ is CCW (left); TURN:- is CW (right).
         signal = (cmdTarget >= 0.0f) ? TURN_LEFT : TURN_RIGHT;
     } else if (currentCmd == CMD_VELOCITY) {
         const float difference = targetRightSpeed - targetLeftSpeed;
-        if (difference > 0.02f) signal = TURN_LEFT;
-        else if (difference < -0.02f) signal = TURN_RIGHT;
+        if (difference > 0.005f) signal = TURN_LEFT;
+        else if (difference < -0.005f) signal = TURN_RIGHT;
     }
     turnIndicatorSet(signal);
     turnIndicatorUpdate();

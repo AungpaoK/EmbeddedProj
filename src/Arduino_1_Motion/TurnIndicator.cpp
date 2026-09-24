@@ -2,20 +2,27 @@
 
 #include <MD_MAX72xx.h>
 #include "DisplayConfig.h"
+#include "robotconfig.h"
 
 namespace {
   MD_MAX72XX matrix(
     MD_MAX72XX::FC16_HW,
-    MAX7219_DATA_PIN,
-    MAX7219_CLK_PIN,
-    MAX7219_CS_PIN,
+    LED_MATRIX_DIN_PIN,
+    LED_MATRIX_CLK_PIN,
+    LED_MATRIX_CS_PIN,
     MAX7219_COUNT
   );
 
+  enum AnimationPhase : uint8_t {
+    PHASE_BUILD,
+    PHASE_HOLD,
+    PHASE_BLANK
+  };
+
   TurnSignal currentSignal = TURN_OFF;
+  AnimationPhase animationPhase = PHASE_BUILD;
   uint8_t animationStep = 0;
-  unsigned long lastAnimationTime = 0;
-  unsigned long nextDelay = 130;
+  unsigned long lastAnimationStep = 0;
 
   uint8_t arrowRight[8] = {
     0b00011000,
@@ -39,7 +46,7 @@ namespace {
     0b00011000
   };
 
-  void drawArrow(uint8_t module, uint8_t picture[]) {
+  void drawArrow(uint8_t module, const uint8_t picture[]) {
     uint8_t firstColumn = module * 8;
 
     for (uint8_t row = 0; row < 8; row++) {
@@ -65,9 +72,9 @@ void turnIndicatorSet(TurnSignal signal) {
   }
 
   currentSignal = signal;
+  animationPhase = PHASE_BUILD;
   animationStep = 0;
-  nextDelay = 0;
-  lastAnimationTime = millis();
+  lastAnimationStep = millis();
   matrix.clear();
   matrix.update();
 }
@@ -78,26 +85,35 @@ void turnIndicatorUpdate() {
   }
 
   unsigned long now = millis();
-  if (now - lastAnimationTime < nextDelay) {
-    return;
-  }
+  unsigned long phaseDuration = TURN_SIGNAL_SEGMENT_MS;
+  if (animationPhase == PHASE_HOLD) phaseDuration = TURN_SIGNAL_HOLD_MS;
+  if (animationPhase == PHASE_BLANK) phaseDuration = TURN_SIGNAL_OFF_MS;
+  if (now - lastAnimationStep < phaseDuration) return;
 
-  lastAnimationTime = now;
-
-  if (animationStep < MAX7219_COUNT) {
-    if (currentSignal == TURN_RIGHT) {
-      drawArrow(animationStep, arrowRight);
-    } else {
-      drawArrow(MAX7219_COUNT - 1 - animationStep, arrowLeft);
+  lastAnimationStep = now;
+  switch (animationPhase) {
+    case PHASE_BUILD: {
+      uint8_t module = animationStep;
+      if (currentSignal == TURN_RIGHT) {
+        drawArrow(module, arrowRight);
+      } else {
+        drawArrow(MAX7219_COUNT - 1 - module, arrowLeft);
+      }
+      animationStep++;
+      if (animationStep >= MAX7219_COUNT) animationPhase = PHASE_HOLD;
+      matrix.update();
+      break;
     }
 
-    animationStep++;
-    nextDelay = 130;
-  } else {
-    matrix.clear();
-    animationStep = 0;
-    nextDelay = 300;
-  }
+    case PHASE_HOLD:
+      matrix.clear();
+      matrix.update();
+      animationPhase = PHASE_BLANK;
+      break;
 
-  matrix.update();
+    case PHASE_BLANK:
+      animationStep = 0;
+      animationPhase = PHASE_BUILD;
+      break;
+  }
 }

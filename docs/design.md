@@ -168,9 +168,9 @@ graph TD
 | **A1 (PC1)** | `RIGHT_ENC_A` | Right Motor Encoder Phase A (Interrupt PCINT1) |
 | **A4 (PC4)** | `LEFT_ENC_B` | Left Motor Encoder Phase B (Interrupt PCINT1) |
 | **A5 (PC5)** | `LEFT_ENC_A` | Left Motor Encoder Phase A (Interrupt PCINT1) |
-| **D2** | `LED_MATRIX_DIN` | Data In ของ LED Matrix (software SPI) |
-| **D3** | `LED_MATRIX_CS` | Chip Select ของ LED Matrix |
-| **D4** | `LED_MATRIX_CLK` | Clock ของ LED Matrix (software SPI) |
+| **D4** | `LED_MATRIX_DIN` | Data In ของ LED Matrix (software SPI) |
+| **D5** | `LED_MATRIX_CS` | Chip Select ของ LED Matrix |
+| **D6** | `LED_MATRIX_CLK` | Clock ของ LED Matrix (software SPI) |
 
 ### Arduino Uno R3 #2 (Shelf & UI Controller)
 

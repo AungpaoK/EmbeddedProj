@@ -3,12 +3,11 @@
 
 #include <Arduino.h>
 
-// Software SPI pins from docs/design.md (DIN, CS, CLK).
-constexpr uint8_t MAX7219_DATA_PIN = 2;
-constexpr uint8_t MAX7219_CS_PIN = 3;
-constexpr uint8_t MAX7219_CLK_PIN = 4;
 constexpr uint8_t MAX7219_COUNT = 4;
 constexpr uint8_t MAX7219_BRIGHTNESS = 2;
+constexpr unsigned long TURN_SIGNAL_SEGMENT_MS = 120;
+constexpr unsigned long TURN_SIGNAL_HOLD_MS = 300;
+constexpr unsigned long TURN_SIGNAL_OFF_MS = 350;
 constexpr unsigned long SERIAL_BAUD_RATE = 115200;
 
 #endif
