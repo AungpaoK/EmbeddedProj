@@ -142,4 +142,6 @@ MOZ_ENABLE_WAYLAND=0
 DISABLE_WAYLAND=1
 ```
 
-launcher จะค้นหา Xauthority ของ Mutter XWayland ใน `XDG_RUNTIME_DIR` ให้ด้วย (เช่น `.mutter-Xwaylandauth.*`) เพื่อให้โปรเซสที่เริ่มผ่าน SSH ได้รับอนุญาตให้เปิดหน้าต่างบนจอ หากยังเปิดไม่ได้ ให้ตรวจบรรทัด `Authorization required` ใน log และยืนยันว่า `POS_DISPLAY` ตรงกับ display ที่ XWayland ใช้ จากนั้นหยุดและเริ่ม stack ใหม่
+launcher จะอ่านพาธ Xauthority ปัจจุบันจากโปรเซส XWayland เพื่อรองรับ cookie ที่เปลี่ยนเมื่อ desktop session เริ่มใหม่ โดยปกติไม่ต้องกำหนด `POS_XAUTHORITY` เอง หากเคยใส่พาธ `.mutter-Xwaylandauth.*` แบบเจาะจงไว้ใน `.env` ให้ลบบรรทัดนั้นหลังอัปเดต launcher แล้ว หากยังเปิดไม่ได้ ให้ตรวจบรรทัด `Authorization required` ใน log และยืนยันว่า `POS_DISPLAY` ตรงกับ display ที่ XWayland ใช้ จากนั้นหยุดและเริ่ม stack ใหม่
+
+หาก touchscreen ใช้งานได้ช่วงสั้น ๆ แล้วหยุด ให้ต่อสาย USB สำหรับข้อมูล touch เข้ากับ Pi และจ่ายไฟให้จอผ่านแหล่งจ่ายไฟของจอแยก จากการทดสอบ อุปกรณ์ touch มีการ disconnect/reconnect ขณะใช้ไฟจาก USB และทำงานต่อเนื่องเมื่อจอมีไฟเลี้ยงแยก อาการนี้ชี้ไปที่ความไม่เสถียรของไฟเลี้ยง USB มากกว่าการแย่ง bandwidth ระหว่างข้อมูล LiDAR, Arduino และ touch

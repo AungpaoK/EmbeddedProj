@@ -171,15 +171,45 @@ POS_PORT="${POS_PORT:-8765}"
 POS_DISPLAY="${POS_DISPLAY:-:0}"
 POS_XDG_RUNTIME_DIR="${POS_XDG_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
 POS_XAUTHORITY="${POS_XAUTHORITY:-}"
+
+# The XWayland authorization cookie is generated per graphical session. Read
+# its current path from the live Xwayland process instead of relying on a
+# hard-coded Mutter cookie suffix in .env.
+ACTIVE_XWAYLAND_AUTHORITY="$(python3 - <<'PY'
+import os
+from pathlib import Path
+
+for cmdline in Path("/proc").glob("[0-9]*/cmdline"):
+    try:
+        raw_args = cmdline.read_bytes().split(b"\0")
+    except OSError:
+        continue
+    args = [arg.decode(errors="replace") for arg in raw_args if arg]
+    if not args or os.path.basename(args[0]) != "Xwayland":
+        continue
+    for index, arg in enumerate(args[:-1]):
+        if arg == "-auth":
+            print(args[index + 1])
+            raise SystemExit(0)
+PY
+)"
+if [[ -n "$ACTIVE_XWAYLAND_AUTHORITY" && -r "$ACTIVE_XWAYLAND_AUTHORITY" ]]; then
+    # Prefer the live Mutter cookie over a generated cookie path saved from a
+    # previous login. Preserve explicit, readable non-Mutter auth files.
+    if [[ -z "$POS_XAUTHORITY" \
+        || ! -r "$POS_XAUTHORITY" \
+        || "$POS_XAUTHORITY" == */.mutter-Xwaylandauth.* ]]; then
+        POS_XAUTHORITY="$ACTIVE_XWAYLAND_AUTHORITY"
+    fi
+fi
 if [[ -z "$POS_XAUTHORITY" ]]; then
     if [[ -z "${SSH_CONNECTION:-}" && -n "${XAUTHORITY:-}" ]]; then
         POS_XAUTHORITY="$XAUTHORITY"
     fi
 fi
 if [[ -z "$POS_XAUTHORITY" ]]; then
-    # Wayland desktop sessions commonly create a temporary XWayland cookie
-    # under XDG_RUNTIME_DIR (for example, .mutter-Xwaylandauth.*). An SSH
-    # shell does not inherit that path, so discover it for local kiosk apps.
+    # Fall back to common X11 authorization paths if no active XWayland cookie
+    # was found above.
     for candidate in \
         "${HOME}/.Xauthority" \
         "${POS_XDG_RUNTIME_DIR}"/.mutter-Xwaylandauth.* \

@@ -13,7 +13,7 @@ ls -l /dev/serial/by-id/
 Check lidar
 
 ```
-henlowworld@raspberrypi4:~/EmbeddedProj$ python3 - <<'PY'
+python3 - <<'PY'
 import serial
 p = serial.Serial(
     "/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0",
@@ -36,3 +36,5 @@ descriptor: a5 5a 14 00 00 00 04
 payload bytes: 20
 model/fw/hw: 18 1d 01 07
 ```
+
+ssh -N -L 8765:127.0.0.1:8765 henlowworld@172.30.81.49
