@@ -7,6 +7,11 @@
 #define ENB 11
 #define IN3 12
 
+// MAX7219 rear turn-indicator matrix (software SPI)
+#define LED_MATRIX_DIN_PIN 4
+#define LED_MATRIX_CS_PIN 5
+#define LED_MATRIX_CLK_PIN 6
+
 // Right Encoder Pins
 
 #define RIGHT_ENC_A A1

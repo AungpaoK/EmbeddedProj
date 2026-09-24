@@ -2,20 +2,20 @@
 
 #include <MD_MAX72xx.h>
 #include "DisplayConfig.h"
+#include "robotconfig.h"
 
 namespace {
   MD_MAX72XX matrix(
     MD_MAX72XX::FC16_HW,
-    MAX7219_DATA_PIN,
-    MAX7219_CLK_PIN,
-    MAX7219_CS_PIN,
+    LED_MATRIX_DIN_PIN,
+    LED_MATRIX_CLK_PIN,
+    LED_MATRIX_CS_PIN,
     MAX7219_COUNT
   );
 
   TurnSignal currentSignal = TURN_OFF;
-  uint8_t animationStep = 0;
-  unsigned long lastAnimationTime = 0;
-  unsigned long nextDelay = 130;
+  bool signalOn = false;
+  unsigned long lastPhaseChange = 0;
 
   uint8_t arrowRight[8] = {
     0b00011000,
@@ -39,7 +39,7 @@ namespace {
     0b00011000
   };
 
-  void drawArrow(uint8_t module, uint8_t picture[]) {
+  void drawArrow(uint8_t module, const uint8_t picture[]) {
     uint8_t firstColumn = module * 8;
 
     for (uint8_t row = 0; row < 8; row++) {
@@ -65,9 +65,8 @@ void turnIndicatorSet(TurnSignal signal) {
   }
 
   currentSignal = signal;
-  animationStep = 0;
-  nextDelay = 0;
-  lastAnimationTime = millis();
+  signalOn = false;
+  lastPhaseChange = millis();
   matrix.clear();
   matrix.update();
 }
@@ -78,26 +77,22 @@ void turnIndicatorUpdate() {
   }
 
   unsigned long now = millis();
-  if (now - lastAnimationTime < nextDelay) {
+  unsigned long phaseDuration = signalOn ? TURN_SIGNAL_ON_MS : TURN_SIGNAL_OFF_MS;
+  if (now - lastPhaseChange < phaseDuration) {
     return;
   }
 
-  lastAnimationTime = now;
-
-  if (animationStep < MAX7219_COUNT) {
-    if (currentSignal == TURN_RIGHT) {
-      drawArrow(animationStep, arrowRight);
-    } else {
-      drawArrow(MAX7219_COUNT - 1 - animationStep, arrowLeft);
+  lastPhaseChange = now;
+  signalOn = !signalOn;
+  matrix.clear();
+  if (signalOn) {
+    for (uint8_t module = 0; module < MAX7219_COUNT; module++) {
+      if (currentSignal == TURN_RIGHT) {
+        drawArrow(module, arrowRight);
+      } else {
+        drawArrow(MAX7219_COUNT - 1 - module, arrowLeft);
+      }
     }
-
-    animationStep++;
-    nextDelay = 130;
-  } else {
-    matrix.clear();
-    animationStep = 0;
-    nextDelay = 300;
   }
-
   matrix.update();
 }
