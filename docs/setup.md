@@ -92,7 +92,7 @@ POS kiosk จะเปิดบนจอ Pi ที่ `DISPLAY=:0` โดยอ�
 POS_DISPLAY=:0 bash start_robot.sh
 ```
 
-ตรวจ log การเปิดหน้าจอได้ที่ `/tmp/pos_kiosk_autostart.log`
+Firefox kiosk ใช้โปรไฟล์ชั่วคราวใหม่ทุกครั้ง แล้วลบเมื่อปิด browser เพื่อไม่ชนกับ lock ของรอบก่อน ตรวจ log การเปิดหน้าจอได้ที่ `/tmp/pos_kiosk_autostart.log`
 
 ## 5. เปิดหน้า POS จากคอมผ่าน SSH tunnel
 
@@ -132,3 +132,5 @@ bash ~/EmbeddedProj/start_robot.sh stop
 `start_robot.sh` ต้องใช้ `MOTION_BACKEND=ros` เพราะ `slam_bridge` เป็นผู้เปิด serial ของ Arduino มอเตอร์ ห้ามรันตัวควบคุมแบบ serial หรือ teleop พร้อมภารกิจส่งอาหาร
 
 หาก kiosk ไม่ปรากฏบนจอ ให้ยืนยันก่อนว่า Pi เข้าสู่ desktop session แล้ว และใช้ SSH ด้วยบัญชีเดียวกับ desktop จากนั้นตรวจ `/tmp/pos_kiosk_autostart.log` และค่า `POS_DISPLAY`/`POS_XAUTHORITY`
+
+หาก Firefox แจ้งว่าเปิดอยู่แล้วแต่ไม่ตอบสนอง ให้ปิดหน้าต่างหรือโปรเซส Firefox เก่าบน Pi หนึ่งครั้ง แล้วเริ่ม kiosk ใหม่ ตัวเปิดปัจจุบันสร้างโปรไฟล์ชั่วคราวแยกในแต่ละครั้ง เพื่อลดปัญหา lock จากรอบก่อน

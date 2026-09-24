@@ -36,17 +36,27 @@ case "$(basename "$BROWSER")" in
     firefox|firefox-esr)
         if [[ -n "${POS_FIREFOX_PROFILE:-}" ]]; then
             FIREFOX_PROFILE="$POS_FIREFOX_PROFILE"
-        elif [[ -d "$HOME/snap/firefox/common" ]]; then
-            FIREFOX_PROFILE="$HOME/snap/firefox/common/pos-kiosk-profile"
+            mkdir -p "$FIREFOX_PROFILE"
         else
-            FIREFOX_PROFILE="${XDG_DATA_HOME:-$HOME/.local/share}/food-delivery-pos/firefox-profile"
+            # Give each kiosk launch a fresh private profile. This avoids
+            # Firefox's "already running, not responding" lock when a prior
+            # kiosk process crashed or is still closing in the background.
+            if [[ -d "$HOME/snap/firefox/common" ]]; then
+                PROFILE_ROOT="$HOME/snap/firefox/common/pos-kiosk-profiles"
+            else
+                PROFILE_ROOT="${XDG_DATA_HOME:-$HOME/.local/share}/food-delivery-pos/firefox-profiles"
+            fi
+            mkdir -p "$PROFILE_ROOT"
+            FIREFOX_PROFILE="$(mktemp -d "$PROFILE_ROOT/pos.XXXXXXXX")"
+            TEMP_FIREFOX_PROFILE="$FIREFOX_PROFILE"
+            trap 'if [[ -n "${TEMP_FIREFOX_PROFILE:-}" ]]; then rm -rf -- "$TEMP_FIREFOX_PROFILE"; fi' EXIT
         fi
-        mkdir -p "$FIREFOX_PROFILE"
         python3 -c 'import json, pathlib, sys; pathlib.Path(sys.argv[1]).write_text("user_pref(\"browser.startup.homepage\", " + json.dumps(sys.argv[2]) + ");\nuser_pref(\"browser.startup.page\", 1);\n", encoding="utf-8")' "$FIREFOX_PROFILE/user.js" "$POS_URL"
         if [[ -n "${WAYLAND_DISPLAY:-}" ]]; then
             export MOZ_ENABLE_WAYLAND="${MOZ_ENABLE_WAYLAND:-1}"
         fi
-        exec "$BROWSER" --no-remote --profile "$FIREFOX_PROFILE" --kiosk --private-window "$POS_URL"
+        echo "Launching Firefox kiosk with profile $FIREFOX_PROFILE"
+        "$BROWSER" --no-remote --profile "$FIREFOX_PROFILE" --kiosk --private-window "$POS_URL"
         ;;
     *)
         exec "$BROWSER" \
