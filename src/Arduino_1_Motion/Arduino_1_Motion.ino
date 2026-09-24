@@ -286,6 +286,19 @@ bool encoderStallDetected() {
 // Serial Command Parser
 // ============================================================
 void parseSerialCommand(const String &line) {
+    if (TURN_INDICATOR_DEMO_MODE) {
+        // Keep every drive output stopped until demo mode is disabled in config.
+        driveMotors(0, 0);
+        currentCmd = CMD_IDLE;
+        targetLeftSpeed = 0.0f;
+        targetRightSpeed = 0.0f;
+        if (line == "STOP") {
+            motionFaultLatched = false;
+            Serial.println("STATUS:DONE");
+        }
+        return;
+    }
+
     if (line.startsWith("LIGHTTEST:")) {
         String direction = line.substring(10);
         if (direction == "LEFT" || direction == "RIGHT") {
@@ -401,6 +414,26 @@ void parseSerialCommand(const String &line) {
 
 // Map the commanded motion to the rear LED-matrix turn signal.
 void updateTurnIndicator() {
+    if (TURN_INDICATOR_DEMO_MODE) {
+        static TurnSignal demoSignal = TURN_RIGHT;
+        static unsigned long nextSideChange = 0;
+        const unsigned long now = millis();
+        const unsigned long sideDuration =
+            TURN_SIGNAL_CYCLE_MS * TURN_INDICATOR_DEMO_CYCLES_PER_SIDE;
+
+        if (nextSideChange == 0) {
+            turnIndicatorSet(demoSignal);
+            nextSideChange = now + sideDuration;
+        } else if ((long)(now - nextSideChange) >= 0) {
+            demoSignal = (demoSignal == TURN_RIGHT) ? TURN_LEFT : TURN_RIGHT;
+            turnIndicatorSet(demoSignal);
+            nextSideChange += sideDuration;
+        }
+
+        turnIndicatorUpdate();
+        return;
+    }
+
     TurnSignal signal = TURN_OFF;
     if (indicatorTestMode) {
         signal = indicatorTestSignal;
@@ -548,11 +581,18 @@ void loop() {
         float dt = (now - lastControlTime) / 1000.0f;
         lastControlTime = now;
 
-        switch (currentCmd) {
-            case CMD_FORWARD:  executeForward(dt);  break;
-            case CMD_TURN:     executeTurn(dt);     break;
-            case CMD_VELOCITY: executeVelocity(dt); break;
-            case CMD_IDLE:     driveMotors(0, 0);   break;
+        if (TURN_INDICATOR_DEMO_MODE) {
+            currentCmd = CMD_IDLE;
+            targetLeftSpeed = 0.0f;
+            targetRightSpeed = 0.0f;
+            driveMotors(0, 0);
+        } else {
+            switch (currentCmd) {
+                case CMD_FORWARD:  executeForward(dt);  break;
+                case CMD_TURN:     executeTurn(dt);     break;
+                case CMD_VELOCITY: executeVelocity(dt); break;
+                case CMD_IDLE:     driveMotors(0, 0);   break;
+            }
         }
     }
 
