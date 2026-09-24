@@ -20,6 +20,7 @@
 
 #include "robotconfig.h"
 #include "Arduino.h"
+#include "TurnIndicator.h"
 
 // ============================================================
 // Encoder Sign Convention
@@ -359,6 +360,21 @@ void parseSerialCommand(const String &line) {
     Serial.println("STATUS:ERROR");
 }
 
+// Map the commanded motion to the rear LED-matrix turn signal.
+void updateTurnIndicator() {
+    TurnSignal signal = TURN_OFF;
+    if (currentCmd == CMD_TURN) {
+        // TURN:+ is CCW (left); TURN:- is CW (right).
+        signal = (cmdTarget >= 0.0f) ? TURN_LEFT : TURN_RIGHT;
+    } else if (currentCmd == CMD_VELOCITY) {
+        const float difference = targetRightSpeed - targetLeftSpeed;
+        if (difference > 0.02f) signal = TURN_LEFT;
+        else if (difference < -0.02f) signal = TURN_RIGHT;
+    }
+    turnIndicatorSet(signal);
+    turnIndicatorUpdate();
+}
+
 // ============================================================
 // Motion Execution (called at 50 Hz)
 // ============================================================
@@ -464,6 +480,7 @@ void executeVelocity(float dt) {
 // ============================================================
 void setup() {
     Serial.begin(115200);
+    turnIndicatorBegin();
 
     // กำหนด Pin ควบคุมมอเตอร์ L298 ตาม robotconfig.h
     pinMode(IN1, OUTPUT);
@@ -482,6 +499,7 @@ void setup() {
 }
 
 void loop() {
+    updateTurnIndicator();
     unsigned long now = millis();
 
     // --- 50 Hz PID/Motion Loop ---

@@ -18,7 +18,7 @@
          +---------------+---------------+
                          |
          +---------------+---------------+
-         |    1st Floor: Control Base    | <--- 12V Battery, L298N, 2x Arduino Uno, Raspi
+         |    1st Floor: Control Base    | <--- 12V Battery, Powerbank, XL4016, L298N, 2x Arduino Uno, Raspi
          +---+-----------+-----------+---+
              |           |           |
           (Caster)  [Drive Wheel] (Caster)
@@ -55,6 +55,8 @@ graph TD
 
     subgraph Floor1["ชั้นที่ 1 (1st Floor - Control & Power Base)"]
         BAT[12V Battery Pack]
+        PB[Powerbank 5V]
+        XL[XL4016 Step-Down Module]
         L298[L298N Motor Driver]
         RPI[Raspberry Pi - SLAM/LiDAR Processor]
         UNO1[Arduino Uno R3 #1 - Motion & Drive Controller]
@@ -69,7 +71,11 @@ graph TD
         LIDAR[2D LiDAR Sensor]
     end
 
+    PB --> RPI
     BAT --> L298
+    BAT --> XL
+    XL --> UNO1
+    XL --> UNO2
     L298 --> MOT_L
     L298 --> MOT_R
     UNO1 --> L298
@@ -82,13 +88,15 @@ graph TD
     UNO2 --> LCD
     UNO2 --> KEYPAD
 
-    LIDAR -.-> RPI
+    RPI -.-> LIDAR
     RPI <==> UNO1
     RPI <==> UNO2
 ```
 
 ### ชั้นที่ 1: ฐานควบคุมและพลังงาน (Control & Power Base)
-- **12V Battery Pack**: แหล่งจ่ายไฟหลักสำหรับระบบขับเคลื่อนและวงจรทั้งหมด
+- **12V Battery Pack**: แหล่งจ่ายไฟหลักสำหรับระบบขับเคลื่อนมอเตอร์ (L298N) และจ่ายเข้าโมดูล XL4016
+- **Powerbank (5V)**: แหล่งจ่ายไฟอิสระสำหรับ Raspberry Pi (และจ่ายต่อให้ 2D LiDAR) โดยเฉพาะ แยกระบบประมวลผลสูงออกจากโหลดมอเตอร์เพื่อป้องกันไฟตก (Brownout) และสัญญาณรบกวน
+- **XL4016 DC-DC Step-Down Buck Converter**: โมดูลลดแรงดันประสิทธิภาพสูงจากแบตเตอรี่ 12V แปลงลงมาจ่ายไฟเลี้ยงให้กับ Arduino Uno R3 #1, Arduino Uno R3 #2 และอุปกรณ์ต่อพ่วง (รุ่นพิกัดกระแสสูงสุด 10A / ใช้งานต่อเนื่องได้สบายๆ 6A-8A)
 - **L298N Dual H-Bridge Motor Driver**: รับสัญญาณ PWM และ Direction จาก Arduino #1 เพื่อขับมอเตอร์กระแสสูง
 - **Arduino Uno R3 #1 (Motion Controller)**:
   - ประมวลผล Interrupt จาก Optical/Magnetic Encoder สองล้อ
@@ -160,7 +168,9 @@ graph TD
 | **A1 (PC1)** | `RIGHT_ENC_A` | Right Motor Encoder Phase A (Interrupt PCINT1) |
 | **A4 (PC4)** | `LEFT_ENC_B` | Left Motor Encoder Phase B (Interrupt PCINT1) |
 | **A5 (PC5)** | `LEFT_ENC_A` | Left Motor Encoder Phase A (Interrupt PCINT1) |
-| **D2, D3, D4 / SPI** | `LED_MATRIX_*` | ขาควบคุม LED Matrix (DIN, CS, CLK) |
+| **D2** | `LED_MATRIX_DIN` | Data In ของ LED Matrix (software SPI) |
+| **D3** | `LED_MATRIX_CS` | Chip Select ของ LED Matrix |
+| **D4** | `LED_MATRIX_CLK` | Clock ของ LED Matrix (software SPI) |
 
 ### Arduino Uno R3 #2 (Shelf & UI Controller)
 
@@ -174,12 +184,35 @@ graph TD
 
 ---
 
-## 5. การวิเคราะห์ระบบไฟฟ้าและแหล่งจ่ายพลังงาน (Power Analysis by Garvis)
+## 5. การวิเคราะห์ระบบไฟฟ้าและแหล่งจ่ายพลังงาน (Power Distribution & Isolation)
 
-> [!CAUTION]
-> **ข้อควรระวังเรื่องกระแสและสัญญาณรบกวน (Power Isolation & Current Limit)**
-> 1. **ตัวลดแรงดันบน L298N (On-board 78M05)**: มีพิกัดจ่ายกระแสสูงสุดเพียง ~500 mA ซึ่ง**เพียงพอเฉพาะการเลี้ยงไฟบอร์ด Arduino Uno** เท่านั้น ไม่สามารถนำไปจ่ายไฟให้ Raspberry Pi 4/5 ได้ (ซึ่งต้องการกระแส 5V @ 3.0A – 5.0A)
-> 2. **ข้อเสนอแนะสำหรับการจ่ายไฟ**:
->    - **สาย 12V ตรง**: จ่ายเข้า L298N ขั้ว $V_S$ สำหรับขับมอเตอร์
->    - **สาย 5V จาก L298N**: ใช้เลี้ยง Arduino Uno #1 และ #2
->    - **โมดูล DC-DC Step-Down (Buck Converter 5V 4A)**: ควรเพิ่มโมดูลแยกสำหรับจ่ายไฟเลี้ยง Raspberry Pi และ LiDAR โดยเฉพาะ เพื่อป้องกันปัญหาบอร์ดรีเซ็ตจากสภาวะไฟตก (Brownout) ขณะมอเตอร์เร่งออกตัว
+การออกแบบระบบจ่ายไฟของหุ่นยนต์ใช้แนวทาง **การแยกโดเมนพลังงาน (Power Domain Isolation)** เพื่อตัดสัญญาณรบกวนทางแม่เหล็กไฟฟ้า (EMI) และป้องกันปัญหาบอร์ดคอมพิวเตอร์รีเซ็ตจากสภาวะไฟตก (Brownout) ขณะมอเตอร์เร่งออกตัวหรือเลี้ยวแบบ Tank Turn:
+
+```
+[Domain 1: High-Level Compute & LiDAR]
+Powerbank (5V) ───────> Raspberry Pi 4/5 (USB-C) ─────────> 2D LiDAR Sensor (USB)
+
+[Domain 2: Main Motor Drive]
+12V Battery Pack ────┬──> L298N Motor Driver (ขั้ว Vs) ───> DC Motors (ซ้าย/ขวา)
+                     │
+[Domain 3: Low-Level Logic & Peripherals]
+                     └──> XL4016 Step-Down Module ────────┬──> Arduino Uno R3 #1 (Motion)
+                          (ปรับลด 12V -> 5V-9V, สูงสุด 10A) ├──> Arduino Uno R3 #2 (Shelf/UI)
+                                                           ├──> LED Matrix (Rear)
+                                                           └──> Sensors & Peripherals
+
+[Common Reference]
+Raspberry Pi <====(สาย USB Serial / Common GND)====> Arduino Uno #1 & #2
+```
+
+### ข้อดีและแนวทางการต่อใช้งาน (Implementation Highlights)
+
+1. **Powerbank สำหรับ Raspberry Pi (Clean & Isolated Power)**:
+   - จ่ายไฟ 5V นิ่งสนิทและแยกโดเมนอิสระจากมอเตอร์โดยสิ้นเชิง
+   - ป้องกันปัญหาไฟตก (Voltage Sag/Brownout) และ Back-EMF จากมอเตอร์ 100% ทำให้ OS (Linux/ROS) และเซนเซอร์ LiDAR ทำงานได้อย่างมีเสถียรภาพสูงสุด
+2. **XL4016 DC-DC Step-Down Buck Converter สำหรับ Arduino & Sensors**:
+   - รองรับกระแสสูงสุดถึง **10A** (ใช้งานต่อเนื่องได้ 6A-8A สบายๆ มีฮีตซิงก์ระบายความร้อนขนาดใหญ่)
+   - ประสิทธิภาพการแปลงพลังงานสูง (~94%) ดีกว่าการใช้เรกูเลเตอร์ 7805 บน L298N ซึ่งจ่ายได้เพียง 500mA และร้อนจัด
+   - มีกำลังไฟสำรองเพียงพอสำหรับจ่ายเลี้ยงทั้ง Arduino Uno 2 บอร์ด, โมดูล LED Matrix และเซนเซอร์อื่นๆ พร้อมกัน
+3. **การต่อกราวด์ร่วม (Common Ground)**:
+   - แม้ Raspberry Pi จะใช้ไฟจาก Powerbank แยกต่างหาก แต่สาย **USB Serial** ที่ต่อระหว่าง Pi กับ Arduino Uno ทั้ง 2 บอร์ด จะเชื่อมขั้วกราวด์ (GND) เข้าด้วยกันโดยอัตโนมัติ ทำให้ระดับแรงดันสัญญาณ Logic (0V/5V) อ้างอิงจุดเดียวกันอย่างปลอดภัยและสื่อสารได้แม่นยำ
