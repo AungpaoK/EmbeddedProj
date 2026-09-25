@@ -79,7 +79,7 @@ class PosBridge:
             state = self._snapshot["state"]
             if state == "CANCELLING":
                 return {"accepted": True}
-            if state not in {"PREPARING", "NAVIGATING", "WAITING_PICKUP", "RETURNING"}:
+            if state not in {"PREPARING", "NAVIGATING", "WAITING_PICKUP", "PICKUP_DELAY", "RETURNING"}:
                 raise PosRequestError(409, "ไม่มีภารกิจที่กำลังทำงานให้ยกเลิก")
 
             self.cancel_event.set()
@@ -200,9 +200,9 @@ class PosBridge:
 
             if state in {"IDLE", "COMPLETED"}:
                 if key == "A":
-                    result = self.apply_pos_action("select_shelf", shelf=1)
-                elif key == "B":
                     result = self.apply_pos_action("select_shelf", shelf=2)
+                elif key == "B":
+                    result = self.apply_pos_action("select_shelf", shelf=1)
                 elif key in {"1", "2"}:
                     result = self.apply_pos_action(
                         "set_table",
@@ -338,7 +338,7 @@ class PosBridge:
     ) -> None:
         with self._lock:
             if self.cancel_event.is_set() and state in {
-                "PREPARING", "NAVIGATING", "WAITING_PICKUP", "RETURNING"
+                "PREPARING", "NAVIGATING", "WAITING_PICKUP", "PICKUP_DELAY", "RETURNING"
             }:
                 state = "CANCELLING"
                 message = "กำลังหยุดหุ่นยนต์..."

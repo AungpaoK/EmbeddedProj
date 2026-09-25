@@ -237,6 +237,20 @@ class DeliveryFSM:
             logger.warning("[FSM] Ignored stale pickup confirmation.")
 
         logger.info("[FSM] Pickup confirmed for shelf %d.", order.shelf)
+        deadline = time.monotonic() + 5.0
+        while True:
+            if self._pos.cancel_event.is_set():
+                self._finish_cancelled()
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            self._pos.set_state(
+                "PICKUP_DELAY",
+                message=f"รับอาหารแล้ว กำลังรออีก {math.ceil(remaining)} วินาทีก่อนเคลื่อนที่",
+                current_order_index=self._current_order_index,
+            )
+            time.sleep(min(0.1, remaining))
         self._state = State.CHECK_REMAIN
 
     def _state_check_remain(self) -> None:

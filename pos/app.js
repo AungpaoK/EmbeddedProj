@@ -41,6 +41,15 @@ let refreshInFlight = false;
 let sidebarOpen = false;
 let activeShelf = 1;
 
+function physicalShelfForUi(shelf) {
+  return 3 - shelf;
+}
+
+function uiShelfMessage(message) {
+  return message.replace(/ชั้น ([12])/g, (_match, shelf) =>
+    "ชั้น " + physicalShelfForUi(Number(shelf)));
+}
+
 function showSetupMessage(message, kind = "") {
   elements.setupMessage.textContent = message;
   elements.setupMessage.dataset.kind = kind;
@@ -117,7 +126,7 @@ function renderStops(snapshot) {
     const summary = document.createElement("span");
     summary.className = "summary-tag";
     summary.dataset.current = String(current);
-    summary.textContent = "ชั้น " + order.shelf + " → " + text + (done ? " · ส่งแล้ว" : "");
+    summary.textContent = "ชั้น " + physicalShelfForUi(order.shelf) + " → " + text + (done ? " · ส่งแล้ว" : "");
     elements.missionSummary.append(summary);
   });
 }
@@ -127,19 +136,22 @@ function renderState(snapshot) {
   const state = snapshot.state || "IDLE";
   const setup = isSetupState();
   const cancellable = Boolean(snapshot.mission_id) &&
-    ["PREPARING", "NAVIGATING", "WAITING_PICKUP", "RETURNING", "CANCELLING"].includes(state);
+    ["PREPARING", "NAVIGATING", "WAITING_PICKUP", "PICKUP_DELAY", "RETURNING", "CANCELLING"].includes(state);
 
   const sharedDraft = snapshot.draft || {};
   for (const shelf of [1, 2]) {
-    const selection = sharedDraft[String(shelf)] || sharedDraft[shelf] || {};
+    const physicalShelf = physicalShelfForUi(shelf);
+    const selection = sharedDraft[String(physicalShelf)] || sharedDraft[physicalShelf] || {};
     draft[shelf] = {
       table_id: Number.isInteger(selection.table_id) ? selection.table_id : null,
       loaded_confirmed: selection.loaded_confirmed === true,
     };
   }
-  activeShelf = [1, 2].includes(snapshot.active_shelf) ? snapshot.active_shelf : 1;
+  activeShelf = [1, 2].includes(snapshot.active_shelf)
+    ? physicalShelfForUi(snapshot.active_shelf)
+    : 1;
   if (setup && snapshot.setup_message) {
-    showSetupMessage(snapshot.setup_message);
+    showSetupMessage(uiShelfMessage(snapshot.setup_message));
   }
 
   elements.connectionWarning.hidden = connected;
@@ -162,6 +174,7 @@ function renderState(snapshot) {
     NAVIGATING: "กำลังเดินทาง",
     CANCELLING: "กำลังหยุดหุ่นยนต์",
     WAITING_PICKUP: "ถึงจุดหมายแล้ว",
+    PICKUP_DELAY: "กำลังรอก่อนเคลื่อนที่",
     RETURNING: "กำลังกลับครัว",
     ERROR: "หุ่นยนต์หยุดทำงาน",
   }[state] || "กำลังทำงาน";
@@ -179,7 +192,7 @@ function renderState(snapshot) {
     elements.deliveryDestination.textContent = "ส่งอาหารครบแล้ว กำลังกลับครัว";
   } else if (currentOrder) {
     elements.deliveryDestination.textContent =
-      "โต๊ะ " + currentOrder.table_id + " · อาหารจากชั้น " + currentOrder.shelf;
+      "โต๊ะ " + currentOrder.table_id + " · อาหารจากชั้น " + physicalShelfForUi(currentOrder.shelf);
   } else {
     elements.deliveryDestination.textContent = "";
   }
@@ -293,17 +306,18 @@ async function cancelMission() {
 
 async function assignTable(shelf, tableId) {
   try {
+    const physicalShelf = physicalShelfForUi(shelf);
     await requestJson("/api/pos/action", {
       method: "POST",
-      body: JSON.stringify({ action: "set_table", shelf, table_id: tableId }),
+      body: JSON.stringify({ action: "set_table", shelf: physicalShelf, table_id: tableId }),
     });
     const snapshot = await requestJson("/api/state");
-    const selection = snapshot.draft && (snapshot.draft[String(shelf)] || snapshot.draft[shelf]);
+    const selection = snapshot.draft && (snapshot.draft[String(physicalShelf)] || snapshot.draft[physicalShelf]);
     // Older running controllers still require the placement flag; newer ones set it with the table.
     if (selection && selection.table_id === tableId && selection.loaded_confirmed !== true) {
       await requestJson("/api/pos/action", {
         method: "POST",
-        body: JSON.stringify({ action: "toggle_loaded", shelf }),
+        body: JSON.stringify({ action: "toggle_loaded", shelf: physicalShelf }),
       });
     }
     await refreshState();
@@ -314,7 +328,7 @@ async function assignTable(shelf, tableId) {
 
 async function applySetupAction(action, shelf = null, tableId = null) {
   const payload = { action };
-  if (shelf !== null) payload.shelf = shelf;
+  if (shelf !== null) payload.shelf = physicalShelfForUi(shelf);
   if (tableId !== null) payload.table_id = tableId;
   try {
     await requestJson("/api/pos/action", {
