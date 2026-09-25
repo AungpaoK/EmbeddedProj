@@ -200,7 +200,7 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
   color: #13764b; background: #e9f8f0; border: 1px solid #c6ecd8;
   border-radius: 12px; font-size: 18px; font-weight: 700;
 }
-.completion-check { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: #1ca56a; }
+.completion-check { width: 24px; height: 24px; flex: 0 0 24px; display: grid; place-items: center; box-sizing: border-box; border-radius: 50%; color: #fff; background: #1ca56a; font-size: 14px; font-weight: 800; line-height: 1; }
 .sidebar-actions {
   margin-top: auto; padding-top: 10px;
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -279,7 +279,7 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
 .pickup-button:hover:not(:disabled) { background: linear-gradient(110deg, #148a57, #0d7046); }
 .pickup-button:disabled { opacity: .65; cursor: wait; }
 .pickup-button small { display: block; margin-left: 3px; color: #dcf6e8; font-size: 15px; font-weight: 600; }
-.pickup-check { width: 27px; height: 27px; display: grid; place-items: center; border: 1px solid #ffffff8c; border-radius: 50%; }
+.pickup-check { width: 27px; height: 27px; flex: 0 0 27px; display: grid; place-items: center; box-sizing: border-box; border: 1px solid #ffffff8c; border-radius: 50%; font-size: 16px; font-weight: 800; line-height: 1; }
 .reset-button {
   min-width: 320px; min-height: 62px; margin-top: 14px; padding: 12px 24px;
   border: 0; border-radius: 15px; color: #fff; background: #bd3540;
