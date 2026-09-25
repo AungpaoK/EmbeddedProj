@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="th">
+<html lang="th" data-theme="dark">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="theme-color" content="#f7f6ef">
+    <meta name="theme-color" content="#111827">
     <meta name="description" content="หน้าจอควบคุมหุ่นยนต์ส่งอาหาร">
     <title>Robot POS</title>
     <link rel="stylesheet" href="/app.css">
@@ -42,13 +42,12 @@
             <aside id="order-sidebar" class="order-sidebar" aria-hidden="true" inert aria-labelledby="setup-heading">
               <header class="sidebar-heading">
                 <div>
-                  <p class="eyebrow">KITCHEN · ORDER SETUP</p>
-                  <h1 id="setup-heading">จัดรายการส่งอาหาร</h1>
+                  <h1 id="setup-heading">จัดรายการสั่งอาหาร</h1>
                 </div>
                 <button id="sidebar-close" class="sidebar-close" type="button" aria-label="ปิดแผงเลือกโต๊ะ">×</button>
               </header>
 
-              <p class="instruction">เลือกโต๊ะให้แต่ละชั้น แล้วยืนยันว่าใส่อาหารแล้ว<br><small>Keypad: A/B เลือกชั้น · 1/2 เลือกโต๊ะ · C ยืนยัน · # เริ่มส่ง</small></p>
+              <p class="keypad-hint">Keypad: A/B เลือกชั้น · 1/2 เลือกโต๊ะ · D ล้างชั้น · # เริ่มส่ง</p>
 
               <div class="order-cards">
                 <article class="order-card" data-order-card data-shelf="1">
@@ -63,10 +62,6 @@
                     <button class="table-option" type="button" data-action="table" data-shelf="1" data-table="1" aria-pressed="false">โต๊ะ 1</button>
                     <button class="table-option" type="button" data-action="table" data-shelf="1" data-table="2" aria-pressed="false">โต๊ะ 2</button>
                   </div>
-                  <button class="loaded-button" type="button" data-action="loaded" data-shelf="1" aria-pressed="false" disabled>
-                    <span class="loaded-indicator"></span>
-                    <span>ยืนยันว่าใส่อาหารแล้ว</span>
-                  </button>
                 </article>
 
                 <article class="order-card" data-order-card data-shelf="2">
@@ -81,10 +76,6 @@
                     <button class="table-option" type="button" data-action="table" data-shelf="2" data-table="1" aria-pressed="false">โต๊ะ 1</button>
                     <button class="table-option" type="button" data-action="table" data-shelf="2" data-table="2" aria-pressed="false">โต๊ะ 2</button>
                   </div>
-                  <button class="loaded-button" type="button" data-action="loaded" data-shelf="2" aria-pressed="false" disabled>
-                    <span class="loaded-indicator"></span>
-                    <span>ยืนยันว่าใส่อาหารแล้ว</span>
-                  </button>
                 </article>
               </div>
 

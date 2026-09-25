@@ -47,7 +47,6 @@ function showSetupMessage(message, kind = "") {
 
 function renderDraft() {
   let selectedCount = 0;
-  let allLoaded = true;
   const setup = isSetupState();
 
   for (const shelf of [1, 2]) {
@@ -57,7 +56,6 @@ function renderDraft() {
     const isSelected = selection.table_id !== null;
     if (isSelected) {
       selectedCount += 1;
-      allLoaded = allLoaded && selection.loaded_confirmed;
     }
 
     card.querySelectorAll('[data-action="table"]').forEach((button) => {
@@ -69,18 +67,12 @@ function renderDraft() {
     const clearButton = card.querySelector('[data-action="clear"]');
     clearButton.disabled = !isSetupState() || !isSelected;
 
-    const loadedButton = card.querySelector('[data-action="loaded"]');
-    loadedButton.disabled = !isSetupState() || !isSelected;
-    loadedButton.setAttribute("aria-pressed", String(selection.loaded_confirmed));
-    loadedButton.lastElementChild.textContent = selection.loaded_confirmed
-      ? "ยืนยันแล้ว · วางอาหารบนชั้นนี้"
-      : "ยืนยันว่าใส่อาหารแล้ว";
   }
 
   elements.robotTable1.textContent = draft[1].table_id === null ? "ว่าง" : "โต๊ะ " + draft[1].table_id;
   elements.robotTable2.textContent = draft[2].table_id === null ? "ว่าง" : "โต๊ะ " + draft[2].table_id;
 
-  const canStart = selectedCount > 0 && allLoaded;
+  const canStart = selectedCount > 0;
   elements.startButton.hidden = !setup;
   elements.startButton.disabled = !setup || !connected || !canStart || startPending;
   elements.robotTrigger.disabled = !setup;
@@ -220,6 +212,15 @@ async function requestJson(path, options = {}) {
   return payload;
 }
 
+async function loadTheme() {
+  try {
+    const config = await requestJson("/api/config");
+    document.documentElement.dataset.theme = config.theme === "dark" ? "dark" : "light";
+  } catch (_error) {
+    // Keep the theme declared in index.html when config is unavailable.
+  }
+}
+
 async function refreshState() {
   if (refreshInFlight) return;
   refreshInFlight = true;
@@ -244,8 +245,8 @@ async function refreshState() {
 
 async function startMission() {
   const selected = [1, 2].filter((shelf) => draft[shelf].table_id !== null);
-  if (selected.length === 0 || selected.some((shelf) => !draft[shelf].loaded_confirmed)) {
-    showSetupMessage("เลือกโต๊ะและยืนยันการวางอาหารให้ครบก่อนเริ่ม", "error");
+  if (selected.length === 0) {
+    showSetupMessage("เลือกโต๊ะอย่างน้อยหนึ่งโต๊ะก่อนเริ่ม", "error");
     return;
   }
 
@@ -264,6 +265,27 @@ async function startMission() {
   } finally {
     startPending = false;
     renderDraft();
+  }
+}
+
+async function assignTable(shelf, tableId) {
+  try {
+    await requestJson("/api/pos/action", {
+      method: "POST",
+      body: JSON.stringify({ action: "set_table", shelf, table_id: tableId }),
+    });
+    const snapshot = await requestJson("/api/state");
+    const selection = snapshot.draft && (snapshot.draft[String(shelf)] || snapshot.draft[shelf]);
+    // Older running controllers still require the placement flag; newer ones set it with the table.
+    if (selection && selection.table_id === tableId && selection.loaded_confirmed !== true) {
+      await requestJson("/api/pos/action", {
+        method: "POST",
+        body: JSON.stringify({ action: "toggle_loaded", shelf }),
+      });
+    }
+    await refreshState();
+  } catch (error) {
+    showSetupMessage(error.message, "error");
   }
 }
 
@@ -354,9 +376,7 @@ document.addEventListener("click", (event) => {
 
   if (button.dataset.action === "table") {
     const table = Number(button.dataset.table);
-    applySetupAction("set_table", shelf, table);
-  } else if (button.dataset.action === "loaded" && selection.table_id !== null) {
-    applySetupAction("toggle_loaded", shelf);
+    assignTable(shelf, table);
   } else if (button.dataset.action === "clear") {
     applySetupAction("clear_shelf", shelf);
   }
@@ -367,5 +387,6 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && sidebarOpen) setSidebarOpen(false);
 });
 
+loadTheme();
 refreshState();
 window.setInterval(refreshState, 500);

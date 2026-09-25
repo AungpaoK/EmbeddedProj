@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import os
 import queue
 import threading
 import uuid
@@ -106,7 +107,7 @@ class PosBridge:
                     self._setup_message = f"ยกเลิกโต๊ะของชั้น {shelf} แล้ว"
                 else:
                     selection["table_id"] = table_id
-                    selection["loaded_confirmed"] = False
+                    selection["loaded_confirmed"] = True
                     self._setup_message = f"เลือกโต๊ะ {table_id} สำหรับชั้น {shelf} แล้ว"
             elif action == "toggle_loaded":
                 if selection["table_id"] is None:
@@ -355,6 +356,10 @@ class PosRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = urlsplit(self.path).path
+        if path == "/api/config":
+            theme = os.environ.get("POS_THEME", "light").strip().lower()
+            self._send_json(200, {"theme": theme if theme in {"light", "dark"} else "light"})
+            return
         if path == "/api/health":
             self._send_json(200, {"ok": True})
             return
