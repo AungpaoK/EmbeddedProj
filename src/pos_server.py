@@ -289,6 +289,7 @@ class PosBridge:
                 "current_order_index": None,
                 "message": "รับรายการแล้ว กำลังเตรียมหุ่นยนต์",
                 "error": None,
+                "obstacle_detected": False,
             }
             self._clear_draft_locked()
             self._setup_message = "รับรายการแล้ว กำลังเริ่มภารกิจ"
