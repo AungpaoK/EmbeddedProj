@@ -63,10 +63,6 @@ function renderDraft() {
     const selection = draft[shelf];
     const card = document.querySelector('[data-order-card][data-shelf="' + shelf + '"]');
     card.dataset.active = String(shelf === activeShelf);
-    const robotShelf = document.querySelector(
-      '[data-robot-shelf="' + physicalShelfForUi(shelf) + '"]'
-    );
-    if (robotShelf) robotShelf.dataset.selected = String(shelf === activeShelf);
     const isSelected = selection.table_id !== null;
     if (isSelected) {
       selectedCount += 1;
