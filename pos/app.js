@@ -63,6 +63,10 @@ function renderDraft() {
     const selection = draft[shelf];
     const card = document.querySelector('[data-order-card][data-shelf="' + shelf + '"]');
     card.dataset.active = String(shelf === activeShelf);
+    const robotShelf = document.querySelector(
+      '[data-robot-shelf="' + physicalShelfForUi(shelf) + '"]'
+    );
+    if (robotShelf) robotShelf.dataset.selected = String(shelf === activeShelf);
     const isSelected = selection.table_id !== null;
     if (isSelected) {
       selectedCount += 1;
@@ -409,7 +413,15 @@ document.addEventListener("click", (event) => {
     return;
   }
   if (button.id === "robot-trigger") {
-    setSidebarOpen(!sidebarOpen);
+    const robotShelf = event.target.closest("[data-robot-shelf]");
+    if (robotShelf) {
+      activeShelf = physicalShelfForUi(Number(robotShelf.dataset.robotShelf));
+      renderDraft();
+      applySetupAction("select_shelf", activeShelf);
+      setSidebarOpen(true);
+    } else {
+      setSidebarOpen(!sidebarOpen);
+    }
     return;
   }
   if (button.id === "sidebar-close") {
