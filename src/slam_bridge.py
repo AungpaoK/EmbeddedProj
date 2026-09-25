@@ -46,12 +46,9 @@ from config import (
     MOTION_SERIAL_PORT,
     MOTION_SERIAL_BAUD,
     SERIAL_TIMEOUT,
-    TURN_INDICATOR_OFF_THRESHOLD,
-    TURN_INDICATOR_ON_THRESHOLD,
-    TURN_INDICATOR_SETTLE_SECONDS,
 )
 from arduino_serial import reset_and_wait_for_encoder
-from turn_indicator import TurnIndicatorController
+from turn_indicator import TURN_OFF, display_signal_for_intent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("SLAMBridge")
@@ -66,11 +63,8 @@ class SlamBridgeNode(Node):
     def __init__(self, ser=None, yaw_offset_deg: float = 0.0):
         super().__init__("slam_bridge_node")
         self._ser = ser
-        self._turn_indicator = TurnIndicatorController(
-            turn_on_threshold=TURN_INDICATOR_ON_THRESHOLD,
-            turn_off_threshold=TURN_INDICATOR_OFF_THRESHOLD,
-            settle_seconds=TURN_INDICATOR_SETTLE_SECONDS,
-        )
+        self._delivery_mission_active = False
+        self._displayed_turn_signal = TURN_OFF
         self._yaw_offset = math.radians(yaw_offset_deg)
         self._laser_x = float(os.environ.get("LIDAR_OFFSET_X", "0.15"))
         self._laser_y = float(os.environ.get("LIDAR_OFFSET_Y", "0.0"))
@@ -98,6 +92,12 @@ class SlamBridgeNode(Node):
         self._arduino_ready_pub = self.create_publisher(Bool, "/arduino/ready", 10)
         self._keypad_pub = self.create_publisher(String, "/keypad/key", 10)
         self._cmd_sub = self.create_subscription(Twist, "/cmd_vel", self._cmd_vel_callback, 10)
+        self._delivery_active_sub = self.create_subscription(
+            Bool, "/delivery_mission_active", self._delivery_mission_callback, 10
+        )
+        self._turn_intent_sub = self.create_subscription(
+            String, "/turn_intent", self._turn_intent_callback, 10
+        )
         self._scan_pub = self.create_publisher(LaserScan, "/scan_filtered", qos_profile_sensor_data)
         self._scan_sub = self.create_subscription(
             LaserScan,
@@ -140,12 +140,7 @@ class SlamBridgeNode(Node):
             f"RightEncInv={self._invert_right_enc}, OdomTrackFactor={self._odom_track_factor} "
             f"(EffectiveTrack={self._effective_track_width:.3f}m)"
         )
-        logger.info(
-            "Turn indicator control runs on Pi: on=%.2f rad/s, off=%.2f rad/s, settle=%.2fs",
-            TURN_INDICATOR_ON_THRESHOLD,
-            TURN_INDICATOR_OFF_THRESHOLD,
-            TURN_INDICATOR_SETTLE_SECONDS,
-        )
+        logger.info("Turn indicator is gated by the active food-delivery mission state.")
 
         # Broadcast Static TF: base_link -> laser และ laser_frame (ทิศทางของ LiDAR)
         self._broadcast_static_laser_tf()
@@ -254,13 +249,39 @@ class SlamBridgeNode(Node):
         v_r = v + (w * WHEEL_BASE / 2.0)
 
         try:
-            signal = self._turn_indicator.update(w, time.monotonic())
-            if signal is not None:
-                self._ser.write(f"INDICATOR:{signal}\n".encode("utf-8"))
             self._ser.write(f"V:{v_l:.3f},{v_r:.3f}\n".encode("utf-8"))
             self._ser.flush()
         except Exception as e:
             logger.error(f"Serial write error: {e}")
+
+    def _delivery_mission_callback(self, msg: Bool):
+        active = bool(msg.data)
+        self._delivery_mission_active = active
+        self._send_turn_signal(TURN_OFF)
+
+    def _turn_intent_callback(self, msg: String):
+        if not self._delivery_mission_active:
+            self._send_turn_signal(TURN_OFF)
+            return
+        try:
+            signal = display_signal_for_intent(
+                msg.data,
+                invert_steer=self._invert_steer,
+            )
+        except ValueError as exc:
+            logger.warning("Ignoring invalid turn intent %r: %s", msg.data, exc)
+            return
+        self._send_turn_signal(signal)
+
+    def _send_turn_signal(self, signal: str):
+        if not self._ser or signal == self._displayed_turn_signal:
+            return
+        try:
+            self._ser.write(f"INDICATOR:{signal}\n".encode("utf-8"))
+            self._ser.flush()
+            self._displayed_turn_signal = signal
+        except Exception as exc:
+            logger.error("Turn indicator serial write failed: %s", exc)
 
     def _serial_read_loop(self):
         """อ่านค่า ENCODER:<L>,<R> จาก Arduino #1"""

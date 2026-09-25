@@ -25,14 +25,8 @@ except ImportError:
 import time
 import logging
 
-from config import (
-    MOTION_COMMAND_TIMEOUT_S,
-    TURN_INDICATOR_OFF_THRESHOLD,
-    TURN_INDICATOR_ON_THRESHOLD,
-    TURN_INDICATOR_SETTLE_SECONDS,
-    WHEEL_BASE,
-)
-from turn_indicator import TurnIndicatorController
+from config import MOTION_COMMAND_TIMEOUT_S
+from turn_indicator import TURN_LEFT, TURN_OFF, TURN_RIGHT, display_signal_for_intent
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +39,19 @@ class MotionClient:
 
     def __init__(self, ser: serial.Serial):
         self._ser = ser
-        self._turn_indicator = "OFF"
-        self._turn_indicator_controller = TurnIndicatorController(
-            turn_on_threshold=TURN_INDICATOR_ON_THRESHOLD,
-            turn_off_threshold=TURN_INDICATOR_OFF_THRESHOLD,
-            settle_seconds=TURN_INDICATOR_SETTLE_SECONDS,
-        )
+        self._delivery_mission_active = False
+        self._turn_indicator = TURN_OFF
+
+    def set_delivery_mission_active(self, active: bool) -> None:
+        """Gate turn signals to the full food-delivery mission lifecycle."""
+        self._delivery_mission_active = bool(active)
+        self._set_display_signal(TURN_OFF)
+
+    def set_turn_intent(self, direction: str) -> None:
+        """Set an explicit left/right turn intent; steering corrections do not call this."""
+        if direction != TURN_OFF and not self._delivery_mission_active:
+            direction = TURN_OFF
+        self._set_display_signal(display_signal_for_intent(direction))
 
     # ------------------------------------------------------------------
     # Public Motion Commands
@@ -61,7 +62,7 @@ class MotionClient:
         สั่งวิ่งตรงระยะ distance_m เมตร
         คืน True ถ้าสำเร็จ, False ถ้า Timeout หรือ Error
         """
-        self._set_turn_indicator("OFF")
+        self.set_turn_intent(TURN_OFF)
         cmd = f"FORWARD:{distance_m:.3f}\n"
         logger.info(f"[Motion] → {cmd.strip()}")
         return self._send_and_wait(cmd)
@@ -72,30 +73,27 @@ class MotionClient:
         + = เลี้ยวซ้าย (CCW), - = เลี้ยวขวา (CW)
         คืน True ถ้าสำเร็จ
         """
-        # Reverse the previous left/right mapping to match the robot's actual
-        # travel direction as seen from behind.
-        signal = "RIGHT" if degrees > 0 else "LEFT" if degrees < 0 else "OFF"
-        self._set_turn_indicator(signal)
+        direction = TURN_LEFT if degrees > 0 else TURN_RIGHT if degrees < 0 else TURN_OFF
+        self.set_turn_intent(direction)
         cmd = f"TURN:{degrees:.1f}\n"
         logger.info(f"[Motion] → {cmd.strip()}")
         try:
             return self._send_and_wait(cmd)
         finally:
-            self._set_turn_indicator("OFF")
+            self.set_turn_intent(TURN_OFF)
 
     def stop(self) -> None:
         """ส่งคำสั่งหยุดฉุกเฉิน (ไม่รอ STATUS:DONE)"""
         cmd = "STOP\n"
         logger.warning(f"[Motion] → STOP (emergency)")
-        self._set_turn_indicator("OFF")
+        self.set_delivery_mission_active(False)
         try:
             self._ser.write(cmd.encode("utf-8"))
             self._ser.flush()
         except serial.SerialException as e:
             logger.error(f"[Motion] Failed to send STOP: {e}")
 
-    def _set_turn_indicator(self, signal: str) -> None:
-        self._turn_indicator_controller.force(signal)
+    def _set_display_signal(self, signal: str) -> None:
         if signal == self._turn_indicator:
             return
         try:
@@ -116,12 +114,6 @@ class MotionClient:
         """
         cmd = f"V:{v_left:.3f},{v_right:.3f}\n"
         try:
-            signal = self._turn_indicator_controller.update(
-                (v_right - v_left) / WHEEL_BASE,
-                time.monotonic(),
-            )
-            if signal is not None:
-                self._set_turn_indicator(signal)
             self._ser.write(cmd.encode("utf-8"))
             self._ser.flush()
             return True
@@ -227,6 +219,21 @@ class RosMotionClient:
 
     def __init__(self, ros_node):
         self._ros_node = ros_node
+        self._delivery_mission_active = False
+
+    def set_delivery_mission_active(self, active: bool) -> None:
+        self._delivery_mission_active = bool(active)
+        if active:
+            self.set_turn_intent(TURN_OFF)
+            self._ros_node.publish_delivery_mission_active(True)
+        else:
+            self._ros_node.publish_delivery_mission_active(False)
+            self.set_turn_intent(TURN_OFF)
+
+    def set_turn_intent(self, direction: str) -> None:
+        if direction != TURN_OFF and not self._delivery_mission_active:
+            direction = TURN_OFF
+        self._ros_node.publish_turn_intent(direction)
 
     def forward(self, distance_m: float) -> bool:
         logger.error(
@@ -251,7 +258,10 @@ class RosMotionClient:
         return self._ros_node.publish_cmd_vel(0.0, 0.0, allow_when_not_ready=True)
 
     def stop(self) -> None:
-        self.stop_continuous()
+        try:
+            self.set_delivery_mission_active(False)
+        finally:
+            self.stop_continuous()
 
     def set_wheel_velocities(self, v_left: float, v_right: float) -> bool:
         linear_v = (v_left + v_right) / 2.0

@@ -100,6 +100,7 @@ class DeliveryFSM:
             detail = getattr(self._waypoint_ctrl, "last_error", None)
             self._latch_error(detail or "ระบบนำทางยังไม่พร้อมเริ่มภารกิจ")
             return
+        self._set_delivery_mission_active(True)
         self._state = State.DELIVERING
 
     def _state_delivering(self) -> None:
@@ -259,6 +260,7 @@ class DeliveryFSM:
             self._latch_error("กลับครัวไม่สำเร็จ; หยุดหุ่นยนต์แล้ว")
             return
 
+        self._set_delivery_mission_active(False)
         self._odom.reset()
         self._shelf.lcd_print(0, "Home! Ready.")
         self._shelf.lcd_print(1, "")
@@ -293,6 +295,7 @@ class DeliveryFSM:
 
     def _latch_error(self, message: str) -> None:
         logger.error("[FSM] %s", message)
+        self._set_delivery_mission_active(False)
         try:
             self._motion.stop_continuous()
         except Exception:
@@ -311,6 +314,7 @@ class DeliveryFSM:
         # The robot is already stopped by _latch_error. Keep stop commands here
         # as a second guard before clearing the latched mission.
         try:
+            self._set_delivery_mission_active(False)
             self._motion.stop_continuous()
         except Exception:
             logger.exception("[FSM] Continuous stop command failed during reset")
@@ -328,6 +332,12 @@ class DeliveryFSM:
     @staticmethod
     def _wrap_angle(angle: float) -> float:
         return math.atan2(math.sin(angle), math.cos(angle))
+
+    def _set_delivery_mission_active(self, active: bool) -> None:
+        try:
+            self._motion.set_delivery_mission_active(active)
+        except Exception:
+            logger.exception("[FSM] Could not update turn-indicator mission gate.")
 
     @staticmethod
     def _print_status(message: str) -> None:

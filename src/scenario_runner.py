@@ -30,7 +30,7 @@ try:
     from nav_msgs.msg import OccupancyGrid, MapMetaData, Odometry, Path
     from sensor_msgs.msg import LaserScan
     from visualization_msgs.msg import Marker, MarkerArray
-    from std_msgs.msg import Bool, ColorRGBA
+    from std_msgs.msg import Bool, ColorRGBA, String
     import tf2_ros
     from PIL import Image
     import yaml
@@ -46,6 +46,7 @@ from config import (
     TABLE2_Y,
     WHEEL_BASE,
 )
+from turn_indicator import TURN_LEFT, TURN_OFF, TURN_RIGHT
 
 # พิกัดตาม docs/scenario.md
 WAYPOINTS = {
@@ -86,6 +87,8 @@ class ScenarioRunnerNode(Node):
         self.marker_pub = self.create_publisher(MarkerArray, "/scenario_markers", latched_qos)
         self.path_pub = self.create_publisher(Path, "/robot_path", 10)
         self.cmd_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+        self.delivery_active_pub = self.create_publisher(Bool, "/delivery_mission_active", 10)
+        self.turn_intent_pub = self.create_publisher(String, "/turn_intent", 10)
 
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
         self.static_tf_broadcaster = tf2_ros.StaticTransformBroadcaster(self)
@@ -264,6 +267,20 @@ class ScenarioRunnerNode(Node):
         siny = 2.0 * (q.w * q.z + q.x * q.y)
         cosy = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
         self.theta = math.atan2(siny, cosy)
+
+    def _publish_delivery_mission_active(self, active: bool):
+        if self.mode != "robot":
+            return
+        msg = Bool()
+        msg.data = bool(active)
+        self.delivery_active_pub.publish(msg)
+
+    def _publish_turn_intent(self, direction: str):
+        if self.mode != "robot":
+            return
+        msg = String()
+        msg.data = direction
+        self.turn_intent_pub.publish(msg)
 
     def _simulation_step(self):
         """Simulation Loop 20 Hz: จำลองจลนศาสตร์ และบรอดคาสต์ TF / Odom (เฉพาะโหมด sim) และอัปเดต Trail"""
@@ -454,6 +471,10 @@ class ScenarioRunnerNode(Node):
         """Turn in place to an absolute odom heading, easing speed near target."""
         target_theta = self._wrap_angle(target_heading)
         initial_error = self._wrap_angle(target_theta - self.theta)
+        if abs(initial_error) > math.radians(tolerance_degrees):
+            self._publish_turn_intent(
+                TURN_LEFT if initial_error > 0.0 else TURN_RIGHT
+            )
         direction = "ซ้าย (CCW)" if initial_error >= 0.0 else "ขวา (CW)"
         print(
             f"  🔄 [Motion] หมุน{direction} ไป heading "
@@ -528,6 +549,7 @@ class ScenarioRunnerNode(Node):
             time.sleep(0.05)
 
         self.stop_robot()
+        self._publish_turn_intent(TURN_OFF)
         if success:
             print(f"  ✓ [Motion] หมุนสำเร็จ (Yaw ปัจจุบัน: {math.degrees(self.theta):.1f}°)")
         else:
@@ -594,12 +616,17 @@ class ScenarioRunnerNode(Node):
             f"Yaw={math.degrees(self.theta):.1f}°"
         )
 
-        if self.scenario_id == 1:
-            self._execute_scenario_1()
-        elif self.scenario_id == 2:
-            self._execute_scenario_2()
-        else:
-            print("Unknown scenario ID.")
+        self._publish_delivery_mission_active(True)
+        try:
+            if self.scenario_id == 1:
+                self._execute_scenario_1()
+            elif self.scenario_id == 2:
+                self._execute_scenario_2()
+            else:
+                print("Unknown scenario ID.")
+        finally:
+            self._publish_turn_intent(TURN_OFF)
+            self._publish_delivery_mission_active(False)
 
     def _execute_scenario_1(self):
         """Scenario 1: Single Table Delivery (ส่ง Table 1 แล้วกลับครัว) พร้อมระบบป้องกันชนสิ่งกีดขวาง"""
@@ -721,6 +748,8 @@ def main():
         rclpy.spin(node)
     except KeyboardInterrupt:
         node.stop_robot()
+        node._publish_turn_intent(TURN_OFF)
+        node._publish_delivery_mission_active(False)
     finally:
         node.running = False
         if rclpy.ok():

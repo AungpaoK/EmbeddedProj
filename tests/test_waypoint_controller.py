@@ -26,6 +26,14 @@ class SimMotion:
         self.angular = 0.0
         self.commands = []
         self.stop_count = 0
+        self.turn_intents = []
+        self.mission_states = []
+
+    def set_turn_intent(self, direction):
+        self.turn_intents.append(direction)
+
+    def set_delivery_mission_active(self, active):
+        self.mission_states.append(bool(active))
 
     def drive_continuous(self, linear, angular, wheel_base=0.343):
         self.linear = linear
@@ -102,6 +110,7 @@ class WaypointControllerTests(unittest.TestCase):
 
         first_turn = next(angular for linear, angular in motion.commands if not linear)
         self.assertGreater(first_turn, 0.0)
+        self.assertEqual(motion.turn_intents, ["LEFT", "OFF"])
         self.assertLess(
             abs(normalize_angle(pose.heading - math.radians(-170.0))),
             math.radians(2.5),
@@ -142,6 +151,34 @@ class WaypointControllerTests(unittest.TestCase):
 
         self.assertGreaterEqual(motion.stop_count, 10)
         self.assertGreater(clock.now, 1.0)
+
+    def test_straight_heading_corrections_do_not_set_turn_intent(self):
+        controller, _pose, motion, _clock = make_controller(
+            heading=math.radians(-4.0)
+        )
+        self.assertTrue(controller.begin_mission())
+
+        self.assertTrue(controller.drive_forward(0.10, 0.0))
+
+        self.assertEqual(motion.turn_intents, [])
+
+    def test_cancelled_heading_turn_clears_turn_intent(self):
+        controller, _pose, motion, _clock = make_controller()
+        self.assertTrue(controller.begin_mission())
+        controller._active = False
+
+        self.assertFalse(controller.turn_to_heading(math.radians(90.0)))
+
+        self.assertEqual(motion.turn_intents, ["LEFT", "OFF"])
+
+    def test_cancel_closes_delivery_indicator_gate(self):
+        controller, _pose, motion, _clock = make_controller()
+        self.assertTrue(controller.begin_mission())
+
+        controller.cancel()
+
+        self.assertEqual(motion.turn_intents, ["OFF"])
+        self.assertEqual(motion.mission_states, [False])
 
 
 if __name__ == "__main__":

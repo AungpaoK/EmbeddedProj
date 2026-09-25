@@ -19,6 +19,7 @@ import time
 from typing import Callable, Optional, Tuple
 
 from config import ARRIVAL_TOLERANCE_M, JUNCTION_X, TABLE1_Y, TABLE2_Y
+from turn_indicator import TURN_LEFT, TURN_OFF, TURN_RIGHT
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +230,36 @@ class WaypointController:
         tolerance_degrees: float = 2.5,
         timeout_s: Optional[float] = None,
     ) -> bool:
+        target_heading = normalize_angle(target_heading)
+        _x, _y, heading = self._get_pose()
+        initial_error = normalize_angle(target_heading - heading)
+        tolerance = math.radians(tolerance_degrees)
+        if abs(initial_error) <= tolerance:
+            self._motion.set_turn_intent(TURN_OFF)
+            self._motion.stop_continuous()
+            return True
+
+        if not self._feedback_healthy():
+            return self._fail("Arduino หรือ odometry ไม่พร้อมก่อนเริ่มหมุน")
+
+        direction = TURN_LEFT if initial_error > 0.0 else TURN_RIGHT
+        try:
+            self._motion.set_turn_intent(direction)
+            return self._turn_to_heading_active(
+                target_heading,
+                tolerance_degrees=tolerance_degrees,
+                timeout_s=timeout_s,
+            )
+        finally:
+            self._motion.set_turn_intent(TURN_OFF)
+
+    def _turn_to_heading_active(
+        self,
+        target_heading: float,
+        *,
+        tolerance_degrees: float,
+        timeout_s: Optional[float],
+    ) -> bool:
         """Turn in place to an absolute mission-relative odometry heading."""
         if not self._feedback_healthy():
             return self._fail("Arduino หรือ odometry ไม่พร้อมก่อนเริ่มหมุน")
@@ -318,6 +349,8 @@ class WaypointController:
     def cancel(self) -> None:
         self._active = False
         self._motion.stop_continuous()
+        self._motion.set_turn_intent(TURN_OFF)
+        self._motion.set_delivery_mission_active(False)
 
     def _feedback_healthy(self) -> bool:
         return bool(self._is_ready() and self._is_pose_fresh())

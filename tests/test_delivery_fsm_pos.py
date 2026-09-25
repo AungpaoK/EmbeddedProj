@@ -16,6 +16,13 @@ class FakeMotion:
     def __init__(self):
         self.stopped = 0
         self.continuous_stopped = 0
+        self.mission_active = []
+
+    def set_delivery_mission_active(self, active):
+        self.mission_active.append(bool(active))
+
+    def set_turn_intent(self, _direction):
+        pass
 
     def stop(self):
         self.stopped += 1
@@ -146,8 +153,10 @@ class DeliveryFsmPosTests(unittest.TestCase):
 
         fsm._state_check_remain()
         self.assertEqual(fsm._state, State.RETURN_STATION)
+        self.assertEqual(_motion.mission_active, [True])
         fsm._state_return_station()
         self.assertEqual(fsm._state, State.WAIT_FOR_POS)
+        self.assertEqual(_motion.mission_active, [True, False])
         self.assertEqual(bridge.snapshot()["state"], "COMPLETED")
         self.assertEqual(odometry.reset_count, 1)
         self.assertEqual(waypoints.calls[-1], ("home",))
@@ -176,6 +185,7 @@ class DeliveryFsmPosTests(unittest.TestCase):
         self.confirm_current_pickup(bridge, accepted, fsm)
         fsm._state_check_remain()
         self.assertEqual(fsm._state, State.RETURN_STATION)
+        self.assertEqual(_motion.mission_active, [True])
 
     def test_physical_override_completes_pickup_wait(self):
         bridge = PosBridge()
@@ -218,6 +228,7 @@ class DeliveryFsmPosTests(unittest.TestCase):
         self.assertEqual(bridge.snapshot()["state"], "ERROR")
         self.assertEqual(motion.stopped, 1)
         self.assertGreaterEqual(motion.continuous_stopped, 1)
+        self.assertEqual(motion.mission_active, [True, False])
 
 
 if __name__ == "__main__":

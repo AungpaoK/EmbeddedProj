@@ -36,12 +36,6 @@ SERIAL_BAUD: int = 115200
 MOTION_SERIAL_BAUD: int = int(os.environ.get("MOTION_SERIAL_BAUD", "115200"))
 SERIAL_TIMEOUT: float = 1.0
 
-# Turn signals are selected on the Pi from the commanded yaw rate. Use a
-# deadband and settling time so small steering adjustments do not flicker.
-TURN_INDICATOR_ON_THRESHOLD: float = float(os.environ.get("TURN_INDICATOR_ON_THRESHOLD", "0.30"))
-TURN_INDICATOR_OFF_THRESHOLD: float = float(os.environ.get("TURN_INDICATOR_OFF_THRESHOLD", "0.18"))
-TURN_INDICATOR_SETTLE_SECONDS: float = float(os.environ.get("TURN_INDICATOR_SETTLE_SECONDS", "0.30"))
-
 # ===========================================================
 # Waypoint Coordinates (หน่วย: เมตร)
 #   กำหนดให้ Serve Station = (0, 0) หันหน้าไปทาง +X

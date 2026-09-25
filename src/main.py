@@ -121,6 +121,8 @@ if HAS_ROS2:
             self.latest_odom_time = 0.0
             self.motion_ready = False
             self._cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
+            self._delivery_active_pub = self.create_publisher(Bool, "/delivery_mission_active", 10)
+            self._turn_intent_pub = self.create_publisher(String, "/turn_intent", 10)
 
             # 1. Subscribe /scan จาก sllidar_ros2
             self._scan_sub = self.create_subscription(
@@ -188,6 +190,16 @@ if HAS_ROS2:
             msg.angular.z = float(angular_w)
             self._cmd_vel_pub.publish(msg)
             return True
+
+        def publish_delivery_mission_active(self, active: bool) -> None:
+            msg = Bool()
+            msg.data = bool(active)
+            self._delivery_active_pub.publish(msg)
+
+        def publish_turn_intent(self, direction: str) -> None:
+            msg = String()
+            msg.data = direction
+            self._turn_intent_pub.publish(msg)
 
 
 # ===========================================================
