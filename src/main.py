@@ -24,6 +24,7 @@ import sys
 import math
 import signal
 import threading
+import time
 try:
     import serial
 except ImportError:
@@ -49,7 +50,7 @@ try:
     import rclpy
     from rclpy.node import Node
     from sensor_msgs.msg import LaserScan
-    from geometry_msgs.msg import PoseWithCovarianceStamped, PoseStamped, Twist
+    from geometry_msgs.msg import Twist
     from nav_msgs.msg import Odometry as RosOdomMsg
     from std_msgs.msg import Bool
     HAS_ROS2 = True
@@ -115,8 +116,8 @@ if HAS_ROS2:
         def __init__(self, safety_guard: LidarSafetyGuard):
             super().__init__("delivery_robot_node")
             self._safety = safety_guard
-            self.latest_slam_pose = None
             self.latest_odom_pose = None
+            self.latest_odom_time = 0.0
             self.motion_ready = False
             self._cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", 10)
 
@@ -128,13 +129,8 @@ if HAS_ROS2:
                 10,
             )
 
-            # 2. Subscribe /pose จาก SLAM Toolbox หรือ AMCL
-            self._pose_sub = self.create_subscription(
-                PoseWithCovarianceStamped,
-                "/amcl_pose",
-                self._pose_callback,
-                10,
-            )
+            # 2. Fixed-route navigation uses encoder odometry. The restaurant
+            # map is a visualization, not an AMCL/Nav2 localization source.
             self._odom_sub = self.create_subscription(
                 RosOdomMsg,
                 "/odom",
@@ -149,24 +145,23 @@ if HAS_ROS2:
             )
             self.get_logger().info("ROS 2 DeliveryRobotRosNode initialized.")
 
-        def _pose_callback(self, msg: PoseWithCovarianceStamped):
-            pos = msg.pose.pose.position
-            q = msg.pose.pose.orientation
-            # แปลง Quaternion เป็น Yaw (rad)
-            siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
-            cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-            yaw = math.atan2(siny_cosp, cosy_cosp)
-            self.latest_slam_pose = (pos.x, pos.y, yaw)
-
         def _odom_callback(self, msg: RosOdomMsg):
             pos = msg.pose.pose.position
             q = msg.pose.pose.orientation
             siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
             cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
             self.latest_odom_pose = (pos.x, pos.y, math.atan2(siny_cosp, cosy_cosp))
+            self.latest_odom_time = time.monotonic()
 
         def _ready_callback(self, msg: Bool):
             self.motion_ready = bool(msg.data)
+
+        def odom_is_fresh(self, max_age_s: float = 1.0) -> bool:
+            return bool(
+                self.latest_odom_pose is not None
+                and self.latest_odom_time > 0.0
+                and time.monotonic() - self.latest_odom_time <= max_age_s
+            )
 
         def publish_cmd_vel(
             self,
@@ -278,10 +273,8 @@ def main() -> None:
         ros_thread.start()
         logger.info("[main] ROS 2 background subscriber thread started.")
 
-    # --- Pose Provider (SLAM Pose with Odometry Fallback) ---
+    # --- Pose Provider (mission-local wheel odometry) ---
     def get_pose():
-        if ros_node and ros_node.latest_slam_pose:
-            return ros_node.latest_slam_pose
         return odometry.pose
 
     # --- Closed-Loop Waypoint Controller ---
@@ -289,6 +282,16 @@ def main() -> None:
         motion=motion,
         safety_guard=safety_guard,
         pose_provider=get_pose,
+        ready_provider=(
+            (lambda: ros_node.motion_ready)
+            if motion_backend == "ros"
+            else (lambda: True)
+        ),
+        pose_fresh_provider=(
+            (lambda: ros_node.odom_is_fresh())
+            if motion_backend == "ros"
+            else (lambda: True)
+        ),
     )
 
     # --- Register Ctrl+C Shutdown ---

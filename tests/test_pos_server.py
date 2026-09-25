@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from pos_server import PosBridge, PosServer
+from pos_console import PosApi, PosApiError
 
 
 class PosServerTests(unittest.TestCase):
@@ -147,6 +148,27 @@ class PosServerTests(unittest.TestCase):
             origin="http://attacker.invalid",
         )
         self.assertEqual(status, 403)
+
+    def test_terminal_client_uses_same_mission_and_pickup_api(self):
+        client = PosApi(self.server.url)
+        accepted = client.submit(
+            [{"shelf": 1, "table_id": 2, "loaded_confirmed": True}]
+        )
+        queued = self.bridge.take_mission(timeout=0.1)
+        self.assertEqual(queued["mission_id"], accepted["mission_id"])
+
+        self.bridge.set_state(
+            "WAITING_PICKUP",
+            message="รอรับอาหาร",
+            current_order_index=0,
+        )
+        result = client.confirm_pickup(accepted["mission_id"], 0)
+        self.assertEqual(result, {"accepted": True})
+
+        with self.assertRaises(PosApiError):
+            client.submit(
+                [{"shelf": 2, "table_id": 1, "loaded_confirmed": True}]
+            )
 
     def assert_rejected_confirmation(self, payload, expected_status):
         status, _ = self.post_json(

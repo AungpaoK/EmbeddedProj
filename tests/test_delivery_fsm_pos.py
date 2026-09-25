@@ -59,13 +59,24 @@ class FakeShelf:
 
 
 class FakeWaypoints:
-    def __init__(self, results=None):
+    def __init__(self, table_results=None, begin_result=True, return_result=True):
         self.calls = []
-        self.results = list(results or [])
+        self.table_results = list(table_results or [])
+        self.begin_result = begin_result
+        self.return_result = return_result
+        self.last_error = "navigation failed"
 
-    def navigate_to(self, x, y, target_theta_deg=None):
-        self.calls.append((x, y, target_theta_deg))
-        return self.results.pop(0) if self.results else True
+    def begin_mission(self):
+        self.calls.append(("begin",))
+        return self.begin_result
+
+    def go_to_table(self, table_id):
+        self.calls.append(("table", table_id))
+        return self.table_results.pop(0) if self.table_results else True
+
+    def return_home(self):
+        self.calls.append(("home",))
+        return self.return_result
 
 
 class DeliveryFsmPosTests(unittest.TestCase):
@@ -120,10 +131,7 @@ class DeliveryFsmPosTests(unittest.TestCase):
         fsm._state_delivering()
         self.assertEqual(fsm._state, State.WAIT_PICKUP)
         self.assertEqual(bridge.snapshot()["state"], "NAVIGATING")
-        self.assertEqual(
-            waypoints.calls[:2],
-            [(2.0, 0.0, None), (2.0, 0.6, 90.0)],
-        )
+        self.assertEqual(waypoints.calls[:2], [("begin",), ("table", 1)])
 
         wait_thread = threading.Thread(target=fsm._state_wait_pickup)
         wait_thread.start()
@@ -142,10 +150,7 @@ class DeliveryFsmPosTests(unittest.TestCase):
         self.assertEqual(fsm._state, State.WAIT_FOR_POS)
         self.assertEqual(bridge.snapshot()["state"], "COMPLETED")
         self.assertEqual(odometry.reset_count, 1)
-        self.assertEqual(
-            waypoints.calls[-2:],
-            [(2.0, 0.0, None), (0.0, 0.0, 0.0)],
-        )
+        self.assertEqual(waypoints.calls[-1], ("home",))
 
     def test_two_orders_are_sent_by_shelf_order_and_confirmed_one_at_a_time(self):
         bridge = PosBridge()
@@ -167,7 +172,7 @@ class DeliveryFsmPosTests(unittest.TestCase):
         self.assertEqual(fsm._state, State.DELIVERING)
 
         fsm._state_delivering()
-        self.assertEqual(waypoints.calls[-1], (2.0, -0.6, -90.0))
+        self.assertEqual(waypoints.calls[-1], ("table", 2))
         self.confirm_current_pickup(bridge, accepted, fsm)
         fsm._state_check_remain()
         self.assertEqual(fsm._state, State.RETURN_STATION)
@@ -197,7 +202,7 @@ class DeliveryFsmPosTests(unittest.TestCase):
 
     def test_navigation_failure_latches_error_and_stops_robot(self):
         bridge = PosBridge()
-        waypoints = FakeWaypoints(results=[False])
+        waypoints = FakeWaypoints(table_results=[False])
         fsm, motion, _odometry, _shelf, _waypoints = self.make_fsm(
             bridge,
             waypoints=waypoints,

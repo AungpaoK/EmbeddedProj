@@ -101,7 +101,7 @@ if [ "$MODE_CHOICE" == "2" ]; then
             MOTION_PORT="$MOTION_PORT" \
             MOTION_SERIAL_BAUD="$MOTION_SERIAL_BAUD" \
             INVERT_LINEAR=1 \
-            INVERT_STEER=1 \
+            INVERT_STEER=0 \
             INVERT_ODOM_YAW=0 \
             ODOM_TRACK_WIDTH_FACTOR=1.185 \
             LIDAR_OFFSET_X=0.15 \

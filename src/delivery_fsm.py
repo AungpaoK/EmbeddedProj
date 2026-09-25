@@ -96,6 +96,10 @@ class DeliveryFSM:
             self._mission_id,
             len(self._orders),
         )
+        if self._waypoint_ctrl is not None and not self._waypoint_ctrl.begin_mission():
+            detail = getattr(self._waypoint_ctrl, "last_error", None)
+            self._latch_error(detail or "ระบบนำทางยังไม่พร้อมเริ่มภารกิจ")
+            return
         self._state = State.DELIVERING
 
     def _state_delivering(self) -> None:
@@ -138,14 +142,7 @@ class DeliveryFSM:
         target_heading = 90.0 if order.table_id == 1 else -90.0
 
         if self._waypoint_ctrl is not None:
-            if not self._waypoint_ctrl.navigate_to(JUNCTION_X, 0.0):
-                logger.error("[FSM] Failed to reach the junction.")
-                return False
-            return self._waypoint_ctrl.navigate_to(
-                JUNCTION_X,
-                target_y,
-                target_theta_deg=target_heading,
-            )
+            return self._waypoint_ctrl.go_to_table(order.table_id)
 
         if index == 0:
             x, y, heading = self._odom.pose
@@ -250,13 +247,7 @@ class DeliveryFSM:
 
         try:
             if self._waypoint_ctrl is not None:
-                reached = self._waypoint_ctrl.navigate_to(JUNCTION_X, 0.0)
-                if reached:
-                    reached = self._waypoint_ctrl.navigate_to(
-                        0.0,
-                        0.0,
-                        target_theta_deg=0.0,
-                    )
+                reached = self._waypoint_ctrl.return_home()
             else:
                 reached = self._return_with_discrete_motion()
         except Exception as exc:

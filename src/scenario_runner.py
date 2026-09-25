@@ -404,8 +404,8 @@ class ScenarioRunnerNode(Node):
                 last_progress_time = now_t
 
             # Hold the heading present at the start of this straight segment.
-            # Positive correction is ROS/odom CCW; compensate for the bridge's
-            # INVERT_STEER setting when publishing the real-robot command.
+            # Delivery launchers configure the bridge so /cmd_vel follows the
+            # ROS convention directly: positive angular.z is counter-clockwise.
             heading_error = self._wrap_angle(target_heading - self.theta)
             correction = 0.0
             if abs(heading_error) > math.radians(1.0):
@@ -418,7 +418,7 @@ class ScenarioRunnerNode(Node):
             if self.mode == "robot":
                 cmd = Twist()
                 cmd.linear.x = speed
-                cmd.angular.z = -correction
+                cmd.angular.z = correction
                 self.cmd_pub.publish(cmd)
 
             if abs(heading_error) > math.radians(5.0) and now_t - last_heading_log_time > 1.0:
@@ -523,11 +523,7 @@ class ScenarioRunnerNode(Node):
                 # Zero linear velocity makes the bridge command equal-magnitude,
                 # opposite-sign wheel speeds for an in-place tank turn.
                 cmd.linear.x = 0.0
-                # The robot bridge uses INVERT_STEER=1 to preserve the
-                # project's j/l teleop direction mapping. Scenario angles
-                # follow ROS/odom convention (+ = CCW), so compensate here
-                # to make the closed-loop command move yaw toward its target.
-                cmd.angular.z = -turn_w
+                cmd.angular.z = turn_w
                 self.cmd_pub.publish(cmd)
             time.sleep(0.05)
 

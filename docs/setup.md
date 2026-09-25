@@ -68,7 +68,7 @@ firmware ปัจจุบันของ Arduino #2 กำหนดปุ่�
 
 ## 4. เปิดระบบทั้งหมดด้วยสคริปต์เดียว
 
-สคริปต์รวมจะเปิด LiDAR, `slam_bridge`, SLAM Toolbox, POS controller และ POS kiosk ใน tmux session ชื่อ `food-robot` โดยไม่ต้องค้าง SSH ไว้:
+สคริปต์รวมจะเปิด LiDAR, `slam_bridge`, ผังร้านและเส้นทางสำหรับ RViz, POS controller และ POS kiosk ใน tmux session ชื่อ `food-robot` โดยไม่ต้องค้าง SSH ไว้ ระบบใช้งานจริงเดินตามเส้นทางปิดรอบ Kitchen → Junction → Table เหมือน `start_scenario.sh`; ผังร้านเป็น visualization และไม่ได้ใช้ Nav2 วางแผนอ้อมสิ่งกีดขวาง
 
 ```bash
 cd ~/EmbeddedProj
@@ -94,6 +94,18 @@ POS_DISPLAY=:0 bash start_robot.sh
 
 Firefox kiosk ใช้โปรไฟล์ชั่วคราวใหม่ทุกครั้ง แล้วลบเมื่อปิด browser เพื่อไม่ชนกับ lock ของรอบก่อน ตรวจ log การเปิดหน้าจอได้ที่ `/tmp/pos_kiosk_autostart.log`
 
+หากต้องการควบคุมจาก terminal แทนหน้าจอสัมผัส ให้เปิด console หลังจาก stack ทำงานแล้ว:
+
+```bash
+bash start_robot.sh console
+```
+
+Console และ POS ใช้ API และสถานะภารกิจชุดเดียวกัน จึงสร้างงานพร้อมกันไม่ได้ แต่สามารถใช้ช่องทางใดช่องทางหนึ่งเพื่อสร้างงานหรือยืนยันการรับอาหารได้ เปิด RViz จากคอมด้วย:
+
+```bash
+./run_rviz2_pc.sh src/scenario_view.rviz
+```
+
 ## 5. เปิดหน้า POS จากคอมผ่าน SSH tunnel
 
 ตัว POS รับเฉพาะการเชื่อมต่อจากเครื่อง Pi (`127.0.0.1`) ถ้าต้องการดูหรือกด POS จากคอม ให้เปิด terminal บนคอมแล้วคง SSH tunnel นี้ไว้:
@@ -112,12 +124,13 @@ ssh -N -L 8765:127.0.0.1:8765 <user>@<IP-ของ-Pi>
 ros2 topic echo /arduino/ready --once
 ros2 topic hz /scan
 ros2 topic hz /odom
+ros2 topic echo /map --once
 curl http://127.0.0.1:8765/api/health
 ```
 
 `/arduino/ready` ควรแสดง `data: true`, `/scan` และ `/odom` ควรมีข้อมูลต่อเนื่อง และ health endpoint ควรตอบ `{"ok": true}` จากนั้นทดลองเคลื่อนที่โดยไม่มีอาหารก่อน และตรวจว่าพิกัดทางแยกกับโต๊ะตรงกับพื้นที่จริง
 
-ตัวควบคุม LiDAR หยุดรถเมื่อพบวัตถุในกรวยด้านหน้า แต่ไม่ได้วางแผนอ้อมสิ่งกีดขวาง [ตัวควบคุม waypoint](/home/jk/EmbeddedProj/src/waypoint_controller.py:67) และระบบส่งอาหารปัจจุบันให้ยืนยันรับอาหารผ่าน POS; เซนเซอร์ IR ไม่ได้ใช้ตัดสินการรับอาหาร [FSM](/home/jk/EmbeddedProj/docs/FSM.md:3)
+ตัวควบคุม LiDAR หยุดรถเมื่อพบวัตถุในกรวยด้านหน้าและเดินต่อเมื่อทางโล่ง แต่ไม่ได้วางแผนอ้อมสิ่งกีดขวาง ระบบส่งอาหารให้ยืนยันรับอาหารผ่าน POS, Terminal console หรือปุ่ม physical override; เซนเซอร์ IR ไม่ได้ใช้ตัดสินการรับอาหาร
 
 ## 7. ปิดระบบ
 
