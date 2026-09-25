@@ -14,7 +14,7 @@ main.py — Food Delivery Robot Entry Point (Unified ROS 2 Hybrid System)
     SHELF_PORT         — Serial port ของ Arduino #2  (default: none)
     BAUD_RATE          — Baud rate ทั้งสอง port       (default: 115200)
     LIDAR_YAW_OFFSET   — องศาชดเชยการวาง LiDAR เทียบกับหน้ารถ (default: 0.0)
-    LIDAR_STOP_DIST    — ระยะหยุดฉุกเฉิน LiDAR (เมตร, default: 0.50)
+    LIDAR_STOP_DIST    — ระยะหยุดฉุกเฉิน LiDAR (เมตร, default: 0.30)
     LOG_LEVEL          — DEBUG / INFO / WARNING        (default: INFO)
 """
 
@@ -214,7 +214,7 @@ def main() -> None:
     shelf_port  = os.environ.get("SHELF_PORT",  SHELF_SERIAL_PORT)
     baud        = int(os.environ.get("BAUD_RATE", SERIAL_BAUD))
     yaw_offset  = float(os.environ.get("LIDAR_YAW_OFFSET", "0.0"))
-    stop_dist   = float(os.environ.get("LIDAR_STOP_DIST", "0.50"))
+    stop_dist   = float(os.environ.get("LIDAR_STOP_DIST", "0.30"))
 
     logger.info("=" * 55)
     logger.info("  Food Delivery Robot — Unified ROS 2 Hybrid")

@@ -25,7 +25,7 @@ class LidarSafetyGuard:
 
     def __init__(
         self,
-        stop_distance_m: float = 0.50,
+        stop_distance_m: float = 0.30,
         front_cone_deg: float = 35.0,
         min_clearance_m: float = 0.22,  # กรองแผ่นตัวถังหรือเสาโครงสร้างด้านใน (~0.17m)
         yaw_offset_deg: float = 0.0,    # องศาชดเชยการยึด LiDAR เทียบกับหน้ารถ
