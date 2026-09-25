@@ -207,7 +207,14 @@ function renderState(snapshot) {
   elements.pickupButton.hidden = !waitingForPickup;
   elements.pickupButton.disabled = Boolean(pickupPendingFor && pickupKey === pickupPendingFor);
   if (waitingForPickup) {
-    const nextOrder = snapshot.orders[index + 1];
+    let nextIndex = index + 1;
+    while (
+      nextIndex < snapshot.orders.length &&
+      snapshot.orders[nextIndex].table_id === currentOrder.table_id
+    ) {
+      nextIndex += 1;
+    }
+    const nextOrder = snapshot.orders[nextIndex];
     elements.pickupNext.textContent = nextOrder
       ? "ต่อไปโต๊ะ " + nextOrder.table_id
       : "ยืนยันเพื่อกลับครัว";

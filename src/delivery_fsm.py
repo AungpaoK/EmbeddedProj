@@ -258,7 +258,14 @@ class DeliveryFSM:
             self._latch_error("ไม่พบลำดับรายการส่ง")
             return
 
+        completed_table = self._orders[self._current_order_index].table_id
         next_index = self._current_order_index + 1
+        while (
+            next_index < len(self._orders)
+            and self._orders[next_index].table_id == completed_table
+        ):
+            next_index += 1
+
         if next_index < len(self._orders):
             self._current_order_index = next_index
             next_order = self._orders[next_index]
