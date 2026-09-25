@@ -56,6 +56,7 @@ class DeliveryFSM:
         self._orders: list[DeliveryOrder] = []
         self._mission_id: str | None = None
         self._current_order_index: int | None = None
+        self._pos.set_cancel_handler(self._stop_for_cancel)
 
     def run(self) -> None:
         logger.info("[FSM] POS-controlled Delivery FSM started.")
@@ -66,6 +67,9 @@ class DeliveryFSM:
             self._step()
 
     def _step(self) -> None:
+        if self._pos.cancel_event.is_set():
+            self._finish_cancelled()
+            return
         match self._state:
             case State.WAIT_FOR_POS:
                 self._state_wait_for_pos()
@@ -85,6 +89,10 @@ class DeliveryFSM:
         if mission is None:
             return
 
+        if self._pos.cancel_event.is_set():
+            self._finish_cancelled()
+            return
+
         self._mission_id = mission["mission_id"]
         self._orders = [
             DeliveryOrder(shelf=item["shelf"], table_id=item["table_id"])
@@ -97,8 +105,14 @@ class DeliveryFSM:
             len(self._orders),
         )
         if self._waypoint_ctrl is not None and not self._waypoint_ctrl.begin_mission():
+            if self._pos.cancel_event.is_set():
+                self._finish_cancelled()
+                return
             detail = getattr(self._waypoint_ctrl, "last_error", None)
             self._latch_error(detail or "ระบบนำทางยังไม่พร้อมเริ่มภารกิจ")
+            return
+        if self._pos.cancel_event.is_set():
+            self._finish_cancelled()
             return
         self._set_delivery_mission_active(True)
         self._state = State.DELIVERING
@@ -128,9 +142,15 @@ class DeliveryFSM:
             reached = self._navigate_to_table(order, self._current_order_index)
         except Exception as exc:
             logger.exception("[FSM] Navigation raised an exception")
+            if self._pos.cancel_event.is_set():
+                self._finish_cancelled()
+                return
             self._latch_error(f"ระบบนำทางขัดข้อง: {exc}")
             return
         if not reached:
+            if self._pos.cancel_event.is_set():
+                self._finish_cancelled()
+                return
             self._latch_error(f"ไปไม่ถึงโต๊ะ {order.table_id}; หยุดหุ่นยนต์แล้ว")
             return
 
@@ -202,6 +222,9 @@ class DeliveryFSM:
 
         expected = (self._mission_id, self._current_order_index)
         while True:
+            if self._pos.cancel_event.is_set():
+                self._finish_cancelled()
+                return
             if self._shelf.consume_override():
                 logger.info("[FSM] Physical pickup override pressed.")
                 break
@@ -253,10 +276,16 @@ class DeliveryFSM:
                 reached = self._return_with_discrete_motion()
         except Exception as exc:
             logger.exception("[FSM] Return navigation raised an exception")
+            if self._pos.cancel_event.is_set():
+                self._finish_cancelled()
+                return
             self._latch_error(f"ระบบนำทางกลับครัวขัดข้อง: {exc}")
             return
 
         if not reached:
+            if self._pos.cancel_event.is_set():
+                self._finish_cancelled()
+                return
             self._latch_error("กลับครัวไม่สำเร็จ; หยุดหุ่นยนต์แล้ว")
             return
 
@@ -273,6 +302,34 @@ class DeliveryFSM:
         self._orders = []
         self._mission_id = None
         self._current_order_index = None
+        self._state = State.WAIT_FOR_POS
+
+    def _stop_for_cancel(self) -> None:
+        """Immediately stop motion while the FSM unwinds the active action."""
+        try:
+            if self._waypoint_ctrl is not None:
+                self._waypoint_ctrl.cancel()
+            else:
+                self._motion.stop_continuous()
+        except Exception:
+            logger.exception("[FSM] Navigation cancel callback failed")
+        try:
+            self._motion.stop()
+        except Exception:
+            logger.exception("[FSM] Emergency stop failed during mission cancellation")
+
+    def _finish_cancelled(self) -> None:
+        self._stop_for_cancel()
+        self._set_delivery_mission_active(False)
+        try:
+            self._shelf.lcd_print(0, "Mission cancelled")
+            self._shelf.lcd_print(1, "Robot stopped")
+        except Exception:
+            logger.exception("[FSM] Could not update shelf display after cancellation")
+        self._orders = []
+        self._mission_id = None
+        self._current_order_index = None
+        self._pos.complete_cancel()
         self._state = State.WAIT_FOR_POS
 
     def _return_with_discrete_motion(self) -> bool:

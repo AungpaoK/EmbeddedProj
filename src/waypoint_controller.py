@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 import time
 from typing import Callable, Optional, Tuple
 
@@ -44,6 +45,7 @@ class WaypointController:
         max_angular_speed: float = 0.75,
         control_rate_hz: float = 20.0,
         preflight_timeout_s: float = 12.0,
+        cancel_event: threading.Event | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -59,6 +61,7 @@ class WaypointController:
         self.max_angular_speed = max_angular_speed
         self.control_period = 1.0 / control_rate_hz
         self.preflight_timeout_s = preflight_timeout_s
+        self._cancel_event = cancel_event or threading.Event()
 
         self._active = False
         self._start_heading: float | None = None
@@ -70,6 +73,9 @@ class WaypointController:
         self.last_error = None
         deadline = self._clock() + self.preflight_timeout_s
         while self._clock() < deadline:
+            if self._cancel_event.is_set():
+                self._motion.stop_continuous()
+                return False
             if self._is_ready() and self._is_pose_fresh():
                 _x, _y, heading = self._get_pose()
                 self._start_heading = normalize_angle(heading)
@@ -179,7 +185,7 @@ class WaypointController:
             math.degrees(target_heading),
         )
 
-        while self._active and traveled < distance:
+        while self._active and not self._cancel_event.is_set() and traveled < distance:
             if not self._feedback_healthy():
                 return self._fail("Arduino หรือ odometry ขาดการตอบสนองระหว่างเดินหน้า")
             if self._clock() > deadline:
@@ -218,6 +224,8 @@ class WaypointController:
                 return self._fail("ไม่พบความคืบหน้าจาก odometry ระหว่างเดินหน้าเกิน 4 วินาที")
 
         self._motion.stop_continuous()
+        if self._cancel_event.is_set():
+            return False
         if traveled >= max(0.0, distance - ARRIVAL_TOLERANCE_M):
             logger.info("[Route] Straight leg completed: %.2fm.", traveled)
             return True
@@ -285,7 +293,7 @@ class WaypointController:
             math.degrees(initial_error),
         )
 
-        while self._active:
+        while self._active and not self._cancel_event.is_set():
             if not self._feedback_healthy():
                 return self._fail("Arduino หรือ odometry ขาดการตอบสนองระหว่างหมุน")
             if self._clock() > deadline:
@@ -344,9 +352,13 @@ class WaypointController:
                 return self._fail("ส่งคำสั่งความเร็วหมุนไม่สำเร็จ")
             self._sleep(self.control_period)
 
+        self._motion.stop_continuous()
+        if self._cancel_event.is_set():
+            return False
         return self._fail("ภารกิจนำทางถูกยกเลิก")
 
     def cancel(self) -> None:
+        self._cancel_event.set()
         self._active = False
         self._motion.stop_continuous()
         self._motion.set_turn_intent(TURN_OFF)

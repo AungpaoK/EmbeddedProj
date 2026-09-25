@@ -319,6 +319,7 @@ def main() -> None:
             if motion_backend == "ros"
             else (lambda: True)
         ),
+        cancel_event=pos_bridge.cancel_event,
     )
 
     # --- Register Ctrl+C Shutdown ---

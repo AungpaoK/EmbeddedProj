@@ -38,6 +38,8 @@ class PosBridge:
         self.pickup_confirmations: queue.Queue[tuple[str, int]] = queue.Queue()
         self.resets: queue.Queue[bool] = queue.Queue(maxsize=1)
         self._lock = threading.RLock()
+        self.cancel_event = threading.Event()
+        self._cancel_handler = None
         self._pickup_pending: tuple[str, int] | None = None
         self._draft: dict[int, dict] = {
             1: {"table_id": None, "loaded_confirmed": False},
@@ -66,6 +68,54 @@ class PosBridge:
                 "active_shelf": self._active_shelf,
                 "setup_message": self._setup_message,
             }
+
+    def set_cancel_handler(self, handler) -> None:
+        """Register the motion controller's immediate stop callback."""
+        self._cancel_handler = handler
+
+    def request_cancel(self) -> dict:
+        """Request a safe stop for a running mission."""
+        with self._lock:
+            state = self._snapshot["state"]
+            if state == "CANCELLING":
+                return {"accepted": True}
+            if state not in {"PREPARING", "NAVIGATING", "WAITING_PICKUP", "RETURNING"}:
+                raise PosRequestError(409, "ไม่มีภารกิจที่กำลังทำงานให้ยกเลิก")
+
+            self.cancel_event.set()
+            self._snapshot = {
+                **self._snapshot,
+                "state": "CANCELLING",
+                "message": "กำลังหยุดหุ่นยนต์...",
+                "error": None,
+            }
+            if state == "PREPARING":
+                try:
+                    self.missions.get_nowait()
+                except queue.Empty:
+                    pass
+            handler = self._cancel_handler
+
+        if handler is not None:
+            handler()
+        return {"accepted": True}
+
+    def complete_cancel(self) -> None:
+        """Return a stopped, cancelled mission to the ready POS state."""
+        with self._lock:
+            self._snapshot = {
+                **self._snapshot,
+                "state": "IDLE",
+                "mission_id": None,
+                "orders": [],
+                "current_order_index": None,
+                "message": "ยกเลิกภารกิจแล้ว หุ่นยนต์หยุดแล้ว",
+                "error": None,
+            }
+            self._clear_draft_locked()
+            self._setup_message = "ยกเลิกภารกิจแล้ว หุ่นยนต์หยุดแล้ว"
+            self._pickup_pending = None
+            self.cancel_event.clear()
 
     def apply_pos_action(
         self,
@@ -224,6 +274,7 @@ class PosBridge:
                 raise PosRequestError(409, "มีงานรอเริ่มอยู่แล้ว") from exc
 
             self._pickup_pending = None
+            self.cancel_event.clear()
             self._snapshot = {
                 "state": "PREPARING",
                 "mission_id": mission_id,
@@ -286,6 +337,11 @@ class PosBridge:
         error: str | None = None,
     ) -> None:
         with self._lock:
+            if self.cancel_event.is_set() and state in {
+                "PREPARING", "NAVIGATING", "WAITING_PICKUP", "RETURNING"
+            }:
+                state = "CANCELLING"
+                message = "กำลังหยุดหุ่นยนต์..."
             self._snapshot = {
                 **self._snapshot,
                 "state": state,
@@ -399,6 +455,9 @@ class PosRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(202, response)
             elif path == "/api/mission/reset":
                 response = self.bridge.request_reset()
+                self._send_json(202, response)
+            elif path == "/api/mission/cancel":
+                response = self.bridge.request_cancel()
                 self._send_json(202, response)
             else:
                 self._send_json(404, {"error": "ไม่พบ API"})

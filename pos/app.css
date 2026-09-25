@@ -210,13 +210,14 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
   border: 1px solid #dfe7f3; border-radius: 99px;
   color: #60718b; background: #fff; font-size: 17px; font-weight: 700;
 }
-.cancel-button {
-  min-height: 54px; padding: 9px 18px;
-  border: 1px solid #d5dce6; border-radius: 14px;
-  color: #586579; background: #f5f7fa; font-size: 22px; font-weight: 750; cursor: pointer;
+.cancel-mission-button {
+  width: min(100%, 480px); min-height: 58px; margin-top: 12px; padding: 12px 24px;
+  border: 1px solid #d98089; border-radius: 15px;
+  color: #fff; background: #b93845; font-size: 24px; font-weight: 800; cursor: pointer;
+  box-shadow: 0 7px 18px #a52e3b35;
 }
-.cancel-button:disabled { opacity: .55; cursor: wait; }
-.cancel-button:hover { color: #9b3540; background: #fff0f1; border-color: #e6aab0; }
+.cancel-mission-button:hover:not(:disabled) { background: #982c38; }
+.cancel-mission-button:disabled { opacity: .65; cursor: wait; }
 .start-button {
   min-width: 210px; min-height: 58px; padding: 10px 20px;
   display: flex; align-items: center; justify-content: center; gap: 12px;
@@ -261,6 +262,7 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
 }
 .delivery-orb svg { width: 62px; height: 62px; }
 .delivery-view[data-state="NAVIGATING"] .delivery-orb { animation: breathe 1.7s ease-in-out infinite; }
+.delivery-view[data-state="CANCELLING"] .delivery-orb { background: linear-gradient(145deg, #ee6870, #9e2532); box-shadow: 0 0 0 12px #ffe2e4, 0 0 0 24px #fff0f1; }
 .delivery-view[data-state="RETURNING"] .delivery-orb { background: linear-gradient(145deg, #7285a6, #475875); }
 .delivery-view[data-state="WAITING_PICKUP"] .delivery-orb { background: linear-gradient(145deg, #20b779, #118052); box-shadow: 0 0 0 12px #d6f4e4, 0 0 0 24px #ecfaf2; }
 .delivery-view[data-state="ERROR"] .delivery-orb { background: linear-gradient(145deg, #ee6870, #bf3440); box-shadow: 0 0 0 12px #ffe2e4, 0 0 0 24px #fff0f1; }
@@ -331,7 +333,6 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
   .table-option { min-height: 56px; font-size: 22px; }
   .loaded-button { font-size: 18px; }
   .capacity-tag { display: none; }
-  .cancel-button { min-height: 56px; }
   .start-button { width: auto; min-width: 0; min-height: 56px; flex: 1; }
   .delivery-view { padding: 20px 16px; }
   .delivery-heading { align-items: flex-start; flex-direction: column; }
@@ -415,8 +416,8 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
 :root[data-theme="dark"] .setup-message { color: #b0bbcc; }
 :root[data-theme="dark"] .clear-button { color: #c0cada; background: #2a3850; }
 :root[data-theme="dark"] .table-option[aria-pressed="true"] { color: #a9edc5; background: #1b4934; border-color: #48ae78; box-shadow: inset 0 0 0 1px #48ae78; }
-:root[data-theme="dark"] .cancel-button { color: #d3dcea; background: #2a3850; border-color: #43536c; }
-:root[data-theme="dark"] .cancel-button:hover { color: #ffc5c9; background: #43272e; border-color: #81434b; }
+:root[data-theme="dark"] .cancel-mission-button { color: #fff; background: #a83340; border-color: #e16a75; }
+:root[data-theme="dark"] .cancel-mission-button:hover:not(:disabled) { background: #8f2a36; }
 :root[data-theme="dark"] .loaded-button[aria-pressed="true"] { color: #a6edc9; background: #183c32; border-color: #3e8b68; }
 :root[data-theme="dark"] .completion-banner { color: #b5f0d0; background: #183c32; border-color: #28694e; }
 :root[data-theme="dark"] .delivery-stop { color: #b0bbcc; }

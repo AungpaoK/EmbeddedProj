@@ -14,7 +14,7 @@ const elements = {
   sidebarClose: document.getElementById("sidebar-close"),
   deliveryView: document.getElementById("delivery-view"),
   setupMessage: document.getElementById("setup-message"),
-  cancelButton: document.getElementById("cancel-button"),
+  cancelMissionButton: document.getElementById("cancel-mission-button"),
   completionBanner: document.getElementById("completion-banner"),
   completionMessage: document.getElementById("completion-message"),
   startButton: document.getElementById("start-button"),
@@ -126,6 +126,8 @@ function renderState(snapshot) {
   controllerState = snapshot;
   const state = snapshot.state || "IDLE";
   const setup = isSetupState();
+  const cancellable = Boolean(snapshot.mission_id) &&
+    ["PREPARING", "NAVIGATING", "WAITING_PICKUP", "RETURNING", "CANCELLING"].includes(state);
 
   const sharedDraft = snapshot.draft || {};
   for (const shelf of [1, 2]) {
@@ -144,6 +146,11 @@ function renderState(snapshot) {
   elements.setupView.hidden = !setup;
   elements.deliveryView.hidden = setup;
   elements.deliveryView.dataset.state = state;
+  elements.cancelMissionButton.hidden = !cancellable;
+  elements.cancelMissionButton.disabled = !connected || state === "CANCELLING";
+  elements.cancelMissionButton.textContent = state === "CANCELLING"
+    ? "กำลังหยุดหุ่นยนต์..."
+    : "ยกเลิกภารกิจ · หยุดหุ่นยนต์";
 
   elements.completionBanner.hidden = state !== "COMPLETED";
   if (state === "COMPLETED") {
@@ -153,6 +160,7 @@ function renderState(snapshot) {
   elements.deliveryTitle.textContent = {
     PREPARING: "กำลังเตรียมภารกิจ",
     NAVIGATING: "กำลังเดินทาง",
+    CANCELLING: "กำลังหยุดหุ่นยนต์",
     WAITING_PICKUP: "ถึงจุดหมายแล้ว",
     RETURNING: "กำลังกลับครัว",
     ERROR: "หุ่นยนต์หยุดทำงาน",
@@ -269,19 +277,17 @@ async function startMission() {
   }
 }
 
-async function cancelDraft() {
-  elements.cancelButton.disabled = true;
+async function cancelMission() {
+  elements.cancelMissionButton.disabled = true;
   try {
-    await requestJson("/api/pos/action", {
+    await requestJson("/api/mission/cancel", {
       method: "POST",
-      body: JSON.stringify({ action: "clear_all" }),
+      body: JSON.stringify({}),
     });
     await refreshState();
-    setSidebarOpen(false);
   } catch (error) {
-    showSetupMessage(error.message, "error");
-  } finally {
-    elements.cancelButton.disabled = false;
+    elements.deliveryMessage.textContent = error.message;
+    elements.cancelMissionButton.disabled = false;
   }
 }
 
@@ -369,8 +375,8 @@ document.addEventListener("click", (event) => {
     startMission();
     return;
   }
-  if (button.id === "cancel-button") {
-    cancelDraft();
+  if (button.id === "cancel-mission-button") {
+    cancelMission();
     return;
   }
   if (button.id === "pickup-button") {
