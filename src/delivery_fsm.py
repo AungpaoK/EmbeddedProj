@@ -104,6 +104,15 @@ class DeliveryFSM:
             self._mission_id,
             len(self._orders),
         )
+        self._motion.stop_continuous()
+        if not self._wait_before_motion(
+            5.0,
+            state="PREPARING",
+            message="กำลังเตรียมออกจากครัว",
+            order_index=self._current_order_index,
+        ):
+            self._finish_cancelled()
+            return
         if self._waypoint_ctrl is not None and not self._waypoint_ctrl.begin_mission():
             if self._pos.cancel_event.is_set():
                 self._finish_cancelled()
@@ -237,21 +246,40 @@ class DeliveryFSM:
             logger.warning("[FSM] Ignored stale pickup confirmation.")
 
         logger.info("[FSM] Pickup confirmed for shelf %d.", order.shelf)
-        deadline = time.monotonic() + 5.0
+        # Explicitly command zero velocity before starting the five-second timer.
+        self._motion.stop_continuous()
+        if not self._wait_before_motion(
+            5.0,
+            state="PICKUP_DELAY",
+            message="รับอาหารแล้ว กำลังรอก่อนเคลื่อนที่",
+            order_index=self._current_order_index,
+        ):
+            self._finish_cancelled()
+            return
+        self._state = State.CHECK_REMAIN
+
+    def _wait_before_motion(
+        self,
+        delay_s: float,
+        *,
+        state: str,
+        message: str,
+        order_index: int | None,
+    ) -> bool:
+        """Keep the robot stopped for a cancellable delay before any movement."""
+        deadline = time.monotonic() + delay_s
         while True:
             if self._pos.cancel_event.is_set():
-                self._finish_cancelled()
-                return
+                return False
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                break
+                return True
             self._pos.set_state(
-                "PICKUP_DELAY",
-                message=f"รับอาหารแล้ว กำลังรออีก {math.ceil(remaining)} วินาทีก่อนเคลื่อนที่",
-                current_order_index=self._current_order_index,
+                state,
+                message=f"{message} อีก {math.ceil(remaining)} วินาที",
+                current_order_index=order_index,
             )
             time.sleep(min(0.1, remaining))
-        self._state = State.CHECK_REMAIN
 
     def _state_check_remain(self) -> None:
         if self._current_order_index is None:
