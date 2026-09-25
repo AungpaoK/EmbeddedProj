@@ -14,6 +14,7 @@ const elements = {
   sidebarClose: document.getElementById("sidebar-close"),
   deliveryView: document.getElementById("delivery-view"),
   setupMessage: document.getElementById("setup-message"),
+  cancelButton: document.getElementById("cancel-button"),
   completionBanner: document.getElementById("completion-banner"),
   completionMessage: document.getElementById("completion-message"),
   startButton: document.getElementById("start-button"),
@@ -268,6 +269,22 @@ async function startMission() {
   }
 }
 
+async function cancelDraft() {
+  elements.cancelButton.disabled = true;
+  try {
+    await requestJson("/api/pos/action", {
+      method: "POST",
+      body: JSON.stringify({ action: "clear_all" }),
+    });
+    await refreshState();
+    setSidebarOpen(false);
+  } catch (error) {
+    showSetupMessage(error.message, "error");
+  } finally {
+    elements.cancelButton.disabled = false;
+  }
+}
+
 async function assignTable(shelf, tableId) {
   try {
     await requestJson("/api/pos/action", {
@@ -350,6 +367,10 @@ document.addEventListener("click", (event) => {
 
   if (button.id === "start-button") {
     startMission();
+    return;
+  }
+  if (button.id === "cancel-button") {
+    cancelDraft();
     return;
   }
   if (button.id === "pickup-button") {
