@@ -116,18 +116,19 @@
             </div>
             <p id="delivery-message" class="delivery-message">กำลังเตรียมหุ่นยนต์</p>
             <p id="delivery-destination" class="delivery-destination"></p>
-            <button id="cancel-mission-button" class="cancel-mission-button" type="button" hidden>
-              ยกเลิกภารกิจ · หยุดหุ่นยนต์
-            </button>
             <div id="error-panel" class="error-panel" role="alert" hidden>
               <strong>ต้องตรวจสอบหุ่นยนต์</strong>
               <span id="error-message"></span>
               <small>ระบบหยุดรับงานใหม่เพื่อความปลอดภัย</small>
             </div>
             <button id="pickup-button" class="pickup-button" type="button" hidden>
-              <span class="pickup-check">✓</span>
-              รับอาหารแล้ว
-              <small id="pickup-next"></small>
+              <span class="pickup-check" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="m5 12 4.5 4.5L19 7" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              </span>
+              <span class="pickup-copy">
+                <span>รับอาหารแล้ว</span>
+                <small id="pickup-next"></small>
+              </span>
             </button>
             <button id="reset-button" class="reset-button" type="button" hidden>
               รีเซ็ตภารกิจ · ไปไม่ถึงโต๊ะ
@@ -135,6 +136,18 @@
           </div>
 
           <div id="mission-summary" class="mission-summary"></div>
+          <div id="obstacle-screen" class="obstacle-screen" role="alert" aria-live="assertive" hidden>
+            <div class="obstacle-card">
+              <div class="obstacle-icon" aria-hidden="true">
+                <svg viewBox="0 0 64 64" fill="none"><circle cx="32" cy="13" r="7" fill="currentColor"/><path d="M24 28c0-4 3-7 8-7s8 3 8 7v12h-6v16h-6V40h-6V28h2Z" fill="currentColor"/><path d="M12 32h7m26 0h7M17 18l5 5m25-5-5 5M17 46l5-5m25 5-5-5" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg>
+              </div>
+              <h2>พบคนขวางทาง</h2>
+              <p>หุ่นยนต์หยุดรอจนกว่าทางจะโล่ง</p>
+            </div>
+          </div>
+          <button id="cancel-mission-button" class="cancel-mission-button" type="button" hidden>
+            ยกเลิกภารกิจ · หยุดหุ่นยนต์
+          </button>
         </section>
       </main>
     </div>

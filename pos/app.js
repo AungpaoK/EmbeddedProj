@@ -13,6 +13,7 @@ const elements = {
   sidebarBackdrop: document.getElementById("sidebar-backdrop"),
   sidebarClose: document.getElementById("sidebar-close"),
   deliveryView: document.getElementById("delivery-view"),
+  obstacleScreen: document.getElementById("obstacle-screen"),
   setupMessage: document.getElementById("setup-message"),
   cancelMissionButton: document.getElementById("cancel-mission-button"),
   completionBanner: document.getElementById("completion-banner"),
@@ -158,6 +159,8 @@ function renderState(snapshot) {
   elements.setupView.hidden = !setup;
   elements.deliveryView.hidden = setup;
   elements.deliveryView.dataset.state = state;
+  elements.obstacleScreen.hidden = snapshot.obstacle_detected !== true;
+  elements.missionSummary.hidden = !setup;
   elements.cancelMissionButton.hidden = !cancellable;
   elements.cancelMissionButton.disabled = !connected || state === "CANCELLING";
   elements.cancelMissionButton.textContent = state === "CANCELLING"

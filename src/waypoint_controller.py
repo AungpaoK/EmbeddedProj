@@ -46,6 +46,7 @@ class WaypointController:
         control_rate_hz: float = 20.0,
         preflight_timeout_s: float = 12.0,
         cancel_event: threading.Event | None = None,
+        obstacle_handler: Callable[[bool], None] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -62,6 +63,8 @@ class WaypointController:
         self.control_period = 1.0 / control_rate_hz
         self.preflight_timeout_s = preflight_timeout_s
         self._cancel_event = cancel_event or threading.Event()
+        self._obstacle_handler = obstacle_handler
+        self._obstacle_reported = False
 
         self._active = False
         self._start_heading: float | None = None
@@ -191,6 +194,7 @@ class WaypointController:
             if self._clock() > deadline:
                 return self._fail(f"เดินหน้าไม่ครบระยะ {traveled:.2f}/{distance:.2f} เมตร")
 
+            self._report_obstacle_state()
             if self._safety.is_obstacle_detected:
                 paused_at = self._clock()
                 self._motion.stop_continuous()
@@ -299,6 +303,7 @@ class WaypointController:
             if self._clock() > deadline:
                 return self._fail("หมุนไม่ถึง heading เป้าหมายภายในเวลาที่กำหนด")
 
+            self._report_obstacle_state()
             if self._safety.is_obstacle_detected:
                 paused_at = self._clock()
                 self._motion.stop_continuous()
@@ -357,7 +362,18 @@ class WaypointController:
             return False
         return self._fail("ภารกิจนำทางถูกยกเลิก")
 
+    def _report_obstacle_state(self) -> None:
+        detected = bool(self._safety.is_obstacle_detected)
+        if detected == self._obstacle_reported:
+            return
+        self._obstacle_reported = detected
+        if self._obstacle_handler is not None:
+            self._obstacle_handler(detected)
+
     def cancel(self) -> None:
+        if self._obstacle_handler is not None:
+            self._obstacle_handler(False)
+        self._obstacle_reported = False
         self._cancel_event.set()
         self._active = False
         self._motion.stop_continuous()

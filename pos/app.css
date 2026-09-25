@@ -211,7 +211,8 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
   color: #60718b; background: #fff; font-size: 17px; font-weight: 700;
 }
 .cancel-mission-button {
-  width: min(100%, 480px); min-height: 58px; margin-top: 12px; padding: 12px 24px;
+  position: absolute; z-index: 12; left: clamp(16px, 3vw, 34px); bottom: 20px;
+  width: auto; max-width: calc(100% - 32px); min-height: 58px; margin: 0; padding: 12px 24px;
   border: 1px solid #d98089; border-radius: 15px;
   color: #fff; background: #b93845; font-size: 24px; font-weight: 800; cursor: pointer;
   box-shadow: 0 7px 18px #a52e3b35;
@@ -231,7 +232,7 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
 .start-button:disabled { color: #a5afbd; background: #e6eaf0; box-shadow: none; cursor: not-allowed; }
 
 .delivery-view {
-  height: 100%; padding: 30px clamp(24px, 5vw, 58px) 24px;
+  position: relative; height: 100%; padding: 30px clamp(24px, 5vw, 58px) 24px;
   display: flex; flex-direction: column;
   background-color: #f7f6ef;
   background-image: radial-gradient(#d9d7ce 1.5px, transparent 1.5px);
@@ -270,7 +271,7 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
 .delivery-destination { min-height: 36px; margin: 12px 0 0; color: #78869b; font-size: 26px; }
 .pickup-button {
   min-width: 285px; min-height: 62px; margin-top: 20px; padding: 12px 22px;
-  display: flex; align-items: center; justify-content: center; gap: 10px;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
   border: 0; border-radius: 15px; color: #fff;
   background: linear-gradient(110deg, #1ca66a, #118052);
   box-shadow: 0 7px 18px #15935c35;
@@ -278,8 +279,13 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
 }
 .pickup-button:hover:not(:disabled) { background: linear-gradient(110deg, #148a57, #0d7046); }
 .pickup-button:disabled { opacity: .65; cursor: wait; }
-.pickup-button small { display: block; margin-left: 3px; color: #dcf6e8; font-size: 15px; font-weight: 600; }
-.pickup-check { width: 27px; height: 27px; flex: 0 0 27px; display: grid; place-items: center; box-sizing: border-box; border: 1px solid #ffffff8c; border-radius: 50%; font-size: 16px; font-weight: 800; line-height: 1; }
+.pickup-copy { display: flex; flex-direction: column; align-items: flex-start; text-align: left; line-height: 1.15; }
+.pickup-button small { display: block; margin: 3px 0 0; color: #dcf6e8; font-size: 15px; font-weight: 600; }
+.pickup-check {
+  width: 32px; height: 32px; flex: 0 0 32px; display: grid; place-items: center;
+  box-sizing: border-box; border: 1px solid #ffffff8c; border-radius: 50%; line-height: 0;
+}
+.pickup-check svg { display: block; width: 20px; height: 20px; }
 .reset-button {
   min-width: 320px; min-height: 62px; margin-top: 14px; padding: 12px 24px;
   border: 0; border-radius: 15px; color: #fff; background: #bd3540;
@@ -290,6 +296,22 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
 .mission-summary { min-height: 32px; display: flex; align-items: center; justify-content: center; gap: 10px; }
 .summary-tag { padding: 8px 14px; border-radius: 99px; color: #68778c; background: #e9eef5; font-size: 17px; font-weight: 700; }
 .summary-tag[data-current="true"] { color: #2454c7; background: #e2ebff; }
+.obstacle-screen {
+  position: absolute; z-index: 10; inset: 0;
+  display: grid; place-items: center; padding: 24px;
+  color: #fff; background: #101827ed; text-align: center;
+}
+.obstacle-screen[hidden] { display: none; }
+.obstacle-card { max-width: 620px; }
+.obstacle-icon {
+  width: 112px; height: 112px; margin: 0 auto 24px; display: grid; place-items: center;
+  color: #fff; background: #c43a47; border-radius: 50%;
+  box-shadow: 0 0 0 14px #c43a4733, 0 0 0 28px #c43a471a;
+}
+.obstacle-icon svg { width: 68px; height: 68px; }
+.obstacle-card h2 { margin: 0; font-size: clamp(38px, 5vw, 60px); }
+.obstacle-card p { margin: 14px 0 0; color: #e4e8ef; font-size: clamp(23px, 2.8vw, 32px); }
+
 .error-panel {
   max-width: 540px; margin-top: 18px; padding: 15px 22px;
   display: flex; flex-direction: column; gap: 6px;

@@ -320,6 +320,7 @@ def main() -> None:
             else (lambda: True)
         ),
         cancel_event=pos_bridge.cancel_event,
+        obstacle_handler=pos_bridge.set_obstacle_detected,
     )
 
     # --- Register Ctrl+C Shutdown ---

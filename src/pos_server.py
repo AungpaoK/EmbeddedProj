@@ -54,6 +54,7 @@ class PosBridge:
             "current_order_index": None,
             "message": "พร้อมรับงาน",
             "error": None,
+            "obstacle_detected": False,
         }
 
     def snapshot(self) -> dict:
@@ -68,6 +69,11 @@ class PosBridge:
                 "active_shelf": self._active_shelf,
                 "setup_message": self._setup_message,
             }
+
+    def set_obstacle_detected(self, detected: bool) -> None:
+        """Publish the LiDAR safety pause state to the POS screen."""
+        with self._lock:
+            self._snapshot["obstacle_detected"] = bool(detected)
 
     def set_cancel_handler(self, handler) -> None:
         """Register the motion controller's immediate stop callback."""
@@ -116,6 +122,7 @@ class PosBridge:
             self._setup_message = "ยกเลิกภารกิจแล้ว หุ่นยนต์หยุดแล้ว"
             self._pickup_pending = None
             self.cancel_event.clear()
+            self._snapshot["obstacle_detected"] = False
 
     def apply_pos_action(
         self,
