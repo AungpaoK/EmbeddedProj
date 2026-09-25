@@ -45,8 +45,12 @@ from config import (
     MOTION_SERIAL_PORT,
     MOTION_SERIAL_BAUD,
     SERIAL_TIMEOUT,
+    TURN_INDICATOR_OFF_THRESHOLD,
+    TURN_INDICATOR_ON_THRESHOLD,
+    TURN_INDICATOR_SETTLE_SECONDS,
 )
 from arduino_serial import reset_and_wait_for_encoder
+from turn_indicator import TurnIndicatorController
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("SLAMBridge")
@@ -61,6 +65,11 @@ class SlamBridgeNode(Node):
     def __init__(self, ser=None, yaw_offset_deg: float = 0.0):
         super().__init__("slam_bridge_node")
         self._ser = ser
+        self._turn_indicator = TurnIndicatorController(
+            turn_on_threshold=TURN_INDICATOR_ON_THRESHOLD,
+            turn_off_threshold=TURN_INDICATOR_OFF_THRESHOLD,
+            settle_seconds=TURN_INDICATOR_SETTLE_SECONDS,
+        )
         self._yaw_offset = math.radians(yaw_offset_deg)
         self._laser_x = float(os.environ.get("LIDAR_OFFSET_X", "0.15"))
         self._laser_y = float(os.environ.get("LIDAR_OFFSET_Y", "0.0"))
@@ -128,6 +137,12 @@ class SlamBridgeNode(Node):
             f"InvertOdomYaw={self._invert_odom_yaw}, LeftEncInv={self._invert_left_enc}, "
             f"RightEncInv={self._invert_right_enc}, OdomTrackFactor={self._odom_track_factor} "
             f"(EffectiveTrack={self._effective_track_width:.3f}m)"
+        )
+        logger.info(
+            "Turn indicator control runs on Pi: on=%.2f rad/s, off=%.2f rad/s, settle=%.2fs",
+            TURN_INDICATOR_ON_THRESHOLD,
+            TURN_INDICATOR_OFF_THRESHOLD,
+            TURN_INDICATOR_SETTLE_SECONDS,
         )
 
         # Broadcast Static TF: base_link -> laser และ laser_frame (ทิศทางของ LiDAR)
@@ -236,9 +251,11 @@ class SlamBridgeNode(Node):
         v_l = v - (w * WHEEL_BASE / 2.0)
         v_r = v + (w * WHEEL_BASE / 2.0)
 
-        cmd = f"V:{v_l:.3f},{v_r:.3f}\n"
         try:
-            self._ser.write(cmd.encode("utf-8"))
+            signal = self._turn_indicator.update(w, time.monotonic())
+            if signal is not None:
+                self._ser.write(f"INDICATOR:{signal}\n".encode("utf-8"))
+            self._ser.write(f"V:{v_l:.3f},{v_r:.3f}\n".encode("utf-8"))
             self._ser.flush()
         except Exception as e:
             logger.error(f"Serial write error: {e}")

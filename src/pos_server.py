@@ -35,6 +35,7 @@ class PosBridge:
     def __init__(self) -> None:
         self.missions: queue.Queue[dict] = queue.Queue(maxsize=1)
         self.pickup_confirmations: queue.Queue[tuple[str, int]] = queue.Queue()
+        self.resets: queue.Queue[bool] = queue.Queue(maxsize=1)
         self._lock = threading.RLock()
         self._pickup_pending: tuple[str, int] | None = None
         self._snapshot: dict = {
@@ -166,6 +167,23 @@ class PosBridge:
         except queue.Empty:
             return None
 
+    def request_reset(self) -> dict:
+        with self._lock:
+            if self._snapshot["state"] != "ERROR":
+                raise PosRequestError(409, "รีเซ็ตได้เมื่อหุ่นยนต์หยุดจากข้อผิดพลาดเท่านั้น")
+            try:
+                self.resets.put_nowait(True)
+            except queue.Full as exc:
+                raise PosRequestError(409, "กำลังรีเซ็ตหุ่นยนต์") from exc
+            return {"accepted": True}
+
+    def take_reset(self, timeout: float) -> bool:
+        try:
+            self.resets.get(timeout=timeout)
+            return True
+        except queue.Empty:
+            return False
+
 
 class PosRequestHandler(BaseHTTPRequestHandler):
     server_version = "RobotPOS/1.0"
@@ -205,6 +223,9 @@ class PosRequestHandler(BaseHTTPRequestHandler):
                     payload.get("mission_id"),
                     payload.get("order_index"),
                 )
+                self._send_json(202, response)
+            elif path == "/api/mission/reset":
+                response = self.bridge.request_reset()
                 self._send_json(202, response)
             else:
                 self._send_json(404, {"error": "ไม่พบ API"})

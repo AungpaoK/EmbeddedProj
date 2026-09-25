@@ -141,6 +141,20 @@ class PosServerTests(unittest.TestCase):
         )
         self.assertEqual(status, 409)
 
+    def test_reset_is_only_accepted_for_latched_error(self):
+        status, _ = self.post_json(
+            "/api/mission/reset", {}, origin=self.origin
+        )
+        self.assertEqual(status, 409)
+
+        self.bridge.set_state("ERROR", message="ไปไม่ถึงโต๊ะ", error="ไปไม่ถึงโต๊ะ")
+        status, result = self.post_json(
+            "/api/mission/reset", {}, origin=self.origin
+        )
+        self.assertEqual(status, 202)
+        self.assertTrue(result["accepted"])
+        self.assertTrue(self.bridge.take_reset(timeout=0.1))
+
     def test_rejects_cross_origin_post(self):
         status, _ = self.post_json(
             "/api/mission/start",

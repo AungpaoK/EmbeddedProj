@@ -101,13 +101,14 @@ graph TD
 - **Arduino Uno R3 #1 (Motion Controller)**:
   - ประมวลผล Interrupt จาก Optical/Magnetic Encoder สองล้อ
   - ทำ Dual PID Speed Control ที่ความถี่ 50 Hz พร้อม Wheel Synchronization
-  - สั่งการแอนิเมชันไฟเลี้ยวและไฟสถานะบน LED Matrix ด้านหลัง
+  - วาดแอนิเมชันไฟเลี้ยวบน LED Matrix ตามคำสั่ง `INDICATOR:LEFT`, `INDICATOR:RIGHT` หรือ `INDICATOR:OFF` จาก Pi
 - **Arduino Uno R3 #2 (Shelf & User Interface Controller)**:
   - ตรวจจับเซนเซอร์ IR ประจำชั้นที่ 2 และ 3
   - เชื่อมต่อหน้าจอ LCD และ Keypad 4x4 สำหรับรับคำสั่งเลือกชั้น/โต๊ะ
 - **Raspberry Pi**:
   - ประมวลผล LiDAR / SLAM เพื่อคำนวณแผนที่และระบุตำแหน่งระดับสูง (High-level Navigation)
   - เชื่อมต่อกับ Arduino ผ่านพอร์ต USB Serial
+  - เลือกสถานะไฟเลี้ยวจากคำสั่งเคลื่อนที่ โดยกรองการปรับทิศทางเล็กน้อยก่อนส่งสถานะให้ Arduino #1
 
 ### ชั้นที่ 2: ถาดเสิร์ฟอาหารชั้น 1 (Food Plate 1)
 - ถาดวางอาหารสำหรับเสิร์ฟโต๊ะเป้าหมายแรก

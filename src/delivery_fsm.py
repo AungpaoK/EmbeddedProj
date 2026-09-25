@@ -78,7 +78,7 @@ class DeliveryFSM:
             case State.RETURN_STATION:
                 self._state_return_station()
             case State.ERROR:
-                time.sleep(0.25)
+                self._state_error()
 
     def _state_wait_for_pos(self) -> None:
         mission = self._pos.take_mission(timeout=0.25)
@@ -303,6 +303,27 @@ class DeliveryFSM:
             logger.exception("[FSM] Stop command failed")
         self._pos.set_state("ERROR", message=message, error=message)
         self._state = State.ERROR
+
+    def _state_error(self) -> None:
+        if not self._pos.take_reset(timeout=0.25):
+            return
+
+        # The robot is already stopped by _latch_error. Keep stop commands here
+        # as a second guard before clearing the latched mission.
+        try:
+            self._motion.stop_continuous()
+        except Exception:
+            logger.exception("[FSM] Continuous stop command failed during reset")
+        try:
+            self._motion.stop()
+        except Exception:
+            logger.exception("[FSM] Stop command failed during reset")
+        self._orders = []
+        self._mission_id = None
+        self._current_order_index = None
+        self._pos.set_state("IDLE", message="รีเซ็ตแล้ว พร้อมเริ่มงานใหม่")
+        self._state = State.WAIT_FOR_POS
+        logger.info("[FSM] Error mission reset; ready for a new mission.")
 
     @staticmethod
     def _wrap_angle(angle: float) -> float:

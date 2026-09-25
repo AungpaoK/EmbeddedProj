@@ -9,6 +9,7 @@ Serial Protocol (Arduino #1):
   ส่งออก (Pi → Arduino):
     FORWARD:<distance_m>\\n   — วิ่งตรงระยะ distance_m เมตร
     TURN:<degrees>\\n          — หมุน degrees องศา (+ = ซ้าย/CCW, - = ขวา/CW)
+    INDICATOR:LEFT|RIGHT|OFF — เลือกไฟเลี้ยวจากสถานะบน Pi
     STOP\\n                    — หยุดฉุกเฉิน
 
   รับกลับ (Arduino → Pi):
@@ -24,7 +25,14 @@ except ImportError:
 import time
 import logging
 
-from config import MOTION_COMMAND_TIMEOUT_S
+from config import (
+    MOTION_COMMAND_TIMEOUT_S,
+    TURN_INDICATOR_OFF_THRESHOLD,
+    TURN_INDICATOR_ON_THRESHOLD,
+    TURN_INDICATOR_SETTLE_SECONDS,
+    WHEEL_BASE,
+)
+from turn_indicator import TurnIndicatorController
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +45,12 @@ class MotionClient:
 
     def __init__(self, ser: serial.Serial):
         self._ser = ser
+        self._turn_indicator = "OFF"
+        self._turn_indicator_controller = TurnIndicatorController(
+            turn_on_threshold=TURN_INDICATOR_ON_THRESHOLD,
+            turn_off_threshold=TURN_INDICATOR_OFF_THRESHOLD,
+            settle_seconds=TURN_INDICATOR_SETTLE_SECONDS,
+        )
 
     # ------------------------------------------------------------------
     # Public Motion Commands
@@ -47,6 +61,7 @@ class MotionClient:
         สั่งวิ่งตรงระยะ distance_m เมตร
         คืน True ถ้าสำเร็จ, False ถ้า Timeout หรือ Error
         """
+        self._set_turn_indicator("OFF")
         cmd = f"FORWARD:{distance_m:.3f}\n"
         logger.info(f"[Motion] → {cmd.strip()}")
         return self._send_and_wait(cmd)
@@ -57,19 +72,38 @@ class MotionClient:
         + = เลี้ยวซ้าย (CCW), - = เลี้ยวขวา (CW)
         คืน True ถ้าสำเร็จ
         """
+        # Reverse the previous left/right mapping to match the robot's actual
+        # travel direction as seen from behind.
+        signal = "RIGHT" if degrees > 0 else "LEFT" if degrees < 0 else "OFF"
+        self._set_turn_indicator(signal)
         cmd = f"TURN:{degrees:.1f}\n"
         logger.info(f"[Motion] → {cmd.strip()}")
-        return self._send_and_wait(cmd)
+        try:
+            return self._send_and_wait(cmd)
+        finally:
+            self._set_turn_indicator("OFF")
 
     def stop(self) -> None:
         """ส่งคำสั่งหยุดฉุกเฉิน (ไม่รอ STATUS:DONE)"""
         cmd = "STOP\n"
         logger.warning(f"[Motion] → STOP (emergency)")
+        self._set_turn_indicator("OFF")
         try:
             self._ser.write(cmd.encode("utf-8"))
             self._ser.flush()
         except serial.SerialException as e:
             logger.error(f"[Motion] Failed to send STOP: {e}")
+
+    def _set_turn_indicator(self, signal: str) -> None:
+        self._turn_indicator_controller.force(signal)
+        if signal == self._turn_indicator:
+            return
+        try:
+            self._ser.write(f"INDICATOR:{signal}\n".encode("utf-8"))
+            self._ser.flush()
+            self._turn_indicator = signal
+        except serial.SerialException as e:
+            logger.error(f"[Motion] Failed to set turn indicator: {e}")
 
     # ------------------------------------------------------------------
     # Continuous Velocity Commands (ROS 2 cmd_vel Streaming)
@@ -82,6 +116,12 @@ class MotionClient:
         """
         cmd = f"V:{v_left:.3f},{v_right:.3f}\n"
         try:
+            signal = self._turn_indicator_controller.update(
+                (v_right - v_left) / WHEEL_BASE,
+                time.monotonic(),
+            )
+            if signal is not None:
+                self._set_turn_indicator(signal)
             self._ser.write(cmd.encode("utf-8"))
             self._ser.flush()
             return True

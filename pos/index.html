@@ -11,37 +11,6 @@
   </head>
   <body>
     <div class="kiosk">
-      <header class="topbar">
-        <div class="brand">
-          <div class="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 32 32" fill="none">
-              <path d="M7 12.5h18v12H7z" stroke="currentColor" stroke-width="2" />
-              <path d="M11 12V8.5a5 5 0 0 1 10 0V12M11 18h.01M21 18h.01M13 21h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-              <path d="M4 17v4M28 17v4" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-            </svg>
-          </div>
-          <div>
-            <strong>ROBO WAITER</strong>
-            <span>หน้าจอควบคุมหุ่นยนต์</span>
-          </div>
-        </div>
-
-        <div class="topbar-center">
-          <span id="status-dot" class="status-dot"></span>
-          <span id="status-label">กำลังเชื่อมต่อ...</span>
-        </div>
-
-        <div class="topbar-right">
-          <span id="connection-label" class="connection-label">เชื่อมต่อระบบ</span>
-          <span id="clock" class="clock">--:--</span>
-          <button id="fullscreen-button" class="icon-button" type="button" aria-label="เต็มหน้าจอ" title="เต็มหน้าจอ">
-            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path d="M8 4H4v4m12-4h4v4M4 16v4h4m12-4v4h-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-          </button>
-        </div>
-      </header>
-
       <div id="connection-warning" class="connection-warning" role="status" hidden>
         เชื่อมต่อ controller ไม่ได้ — ภารกิจที่เริ่มแล้วจะยังทำงานต่อ
       </div>
@@ -151,6 +120,9 @@
               <span class="pickup-check">✓</span>
               รับอาหารแล้ว
               <small id="pickup-next"></small>
+            </button>
+            <button id="reset-button" class="reset-button" type="button" hidden>
+              รีเซ็ตภารกิจ · ไปไม่ถึงโต๊ะ
             </button>
           </div>
 

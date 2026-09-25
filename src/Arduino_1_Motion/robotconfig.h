@@ -21,16 +21,11 @@
 constexpr uint8_t MAX7219_COUNT = 4;
 constexpr uint8_t MAX7219_BRIGHTNESS = 2;
 
-// Demo mode cycles right five times, then left five times, indefinitely.
-// Set false and reflash to select turn signals from motion commands.
-constexpr bool TURN_INDICATOR_DEMO_MODE = false;
-constexpr uint8_t TURN_INDICATOR_DEMO_CYCLES_PER_SIDE = 5;
-
+// These values control only the MAX7219 rendering animation. The Raspberry
+// Pi decides whether the requested signal is left, right, or off.
 constexpr unsigned long TURN_SIGNAL_SEGMENT_MS = 120;
 constexpr unsigned long TURN_SIGNAL_HOLD_MS = 300;
 constexpr unsigned long TURN_SIGNAL_OFF_MS = 350;
-constexpr unsigned long TURN_SIGNAL_CYCLE_MS =
-    MAX7219_COUNT * TURN_SIGNAL_SEGMENT_MS + TURN_SIGNAL_HOLD_MS + TURN_SIGNAL_OFF_MS;
 
 // Right Encoder Pins
 
