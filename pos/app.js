@@ -41,6 +41,7 @@ let lastError = "";
 let refreshInFlight = false;
 let sidebarOpen = false;
 let activeShelf = 1;
+let lastKeypadSidebarRequest = null;
 
 function physicalShelfForUi(shelf) {
   return 3 - shelf;
@@ -91,6 +92,7 @@ function renderDraft() {
 }
 
 function setSidebarOpen(open) {
+  const wasOpen = sidebarOpen;
   sidebarOpen = Boolean(open) && isSetupState();
   elements.setupView.classList.toggle("sidebar-open", sidebarOpen);
   elements.orderSidebar.classList.toggle("is-open", sidebarOpen);
@@ -98,6 +100,12 @@ function setSidebarOpen(open) {
   elements.orderSidebar.toggleAttribute("inert", !sidebarOpen);
   elements.sidebarBackdrop.hidden = !sidebarOpen;
   elements.robotTrigger.setAttribute("aria-expanded", String(sidebarOpen));
+  if (connected && wasOpen !== sidebarOpen) {
+    requestJson("/api/pos/action", {
+      method: "POST",
+      body: JSON.stringify({ action: sidebarOpen ? "sidebar_open" : "sidebar_close" }),
+    }).catch(() => {});
+  }
 }
 
 function isSetupState() {
@@ -151,6 +159,19 @@ function renderState(snapshot) {
   activeShelf = [1, 2].includes(snapshot.active_shelf)
     ? physicalShelfForUi(snapshot.active_shelf)
     : 1;
+  const keypadSidebarRequest = Number.isInteger(snapshot.keypad_sidebar_request)
+    ? snapshot.keypad_sidebar_request
+    : 0;
+  if (lastKeypadSidebarRequest === null) {
+    lastKeypadSidebarRequest = keypadSidebarRequest;
+    if (setup && (
+      snapshot.keypad_sidebar_open === true ||
+      snapshot.keypad_sidebar_pending === true
+    )) setSidebarOpen(true);
+  } else if (setup && keypadSidebarRequest !== lastKeypadSidebarRequest) {
+    lastKeypadSidebarRequest = keypadSidebarRequest;
+    setSidebarOpen(true);
+  }
   if (setup && snapshot.setup_message) {
     showSetupMessage(uiShelfMessage(snapshot.setup_message));
   }

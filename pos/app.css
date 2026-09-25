@@ -118,6 +118,11 @@ button:focus-visible { outline: 3px solid #ffbd59; outline-offset: 4px; }
   position: absolute; left: -8%; right: -8%; bottom: 2%; height: 4%;
   border-radius: 50%; background: #34455d17; filter: blur(11px);
 }
+.home-keypad-hint {
+  max-width: 900px; margin: 8px auto 0; padding: 9px 14px;
+  color: #77849a; font-size: clamp(17px, 1.55vw, 21px);
+  line-height: 1.35; font-weight: 700; text-align: center;
+}
 .robot-caption {
   display: flex; align-items: center; justify-content: center; gap: 12px;
   padding: 12px 22px; border: 1px solid #e1e5dc; border-radius: 999px;
@@ -412,6 +417,7 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
   background-color: #111827;
   background-image: radial-gradient(#344154 1.5px, transparent 1.5px);
 }
+:root[data-theme="dark"] .home-keypad-hint { color: #b0bbcc; }
 :root[data-theme="dark"] .robot-caption,
 :root[data-theme="dark"] .order-sidebar,
 :root[data-theme="dark"] .order-card,

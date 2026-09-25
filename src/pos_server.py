@@ -46,6 +46,9 @@ class PosBridge:
             2: {"table_id": None, "loaded_confirmed": False},
         }
         self._active_shelf = 1
+        self._keypad_sidebar_open = False
+        self._keypad_sidebar_pending = False
+        self._keypad_sidebar_request = 0
         self._setup_message = "เลือกชั้นและโต๊ะเพื่อเริ่มงาน"
         self._snapshot: dict = {
             "state": "IDLE",
@@ -67,6 +70,9 @@ class PosBridge:
                     for shelf, selection in self._draft.items()
                 },
                 "active_shelf": self._active_shelf,
+                "keypad_sidebar_request": self._keypad_sidebar_request,
+                "keypad_sidebar_open": self._keypad_sidebar_open,
+                "keypad_sidebar_pending": self._keypad_sidebar_pending,
                 "setup_message": self._setup_message,
             }
 
@@ -143,6 +149,11 @@ class PosBridge:
             if self._snapshot["state"] not in {"IDLE", "COMPLETED"}:
                 raise PosRequestError(409, "แก้รายการได้เฉพาะขณะหุ่นยนต์รอรับงาน")
 
+            if action in {"sidebar_open", "sidebar_close"}:
+                self._keypad_sidebar_open = action == "sidebar_open"
+                self._keypad_sidebar_pending = False
+                return {"accepted": True}
+
             if action == "clear_all":
                 self._clear_draft_locked()
                 self._setup_message = "ล้างรายการทั้งหมดแล้ว"
@@ -204,12 +215,21 @@ class PosBridge:
                 active_shelf = self._active_shelf
                 mission_id = self._snapshot["mission_id"]
                 order_index = self._snapshot["current_order_index"]
+                keypad_sidebar_open = self._keypad_sidebar_open
 
             if state in {"IDLE", "COMPLETED"}:
                 if key == "A":
                     result = self.apply_pos_action("select_shelf", shelf=2)
+                    with self._lock:
+                        self._keypad_sidebar_pending = not self._keypad_sidebar_open
+                        self._keypad_sidebar_request += 1
                 elif key == "B":
                     result = self.apply_pos_action("select_shelf", shelf=1)
+                    with self._lock:
+                        self._keypad_sidebar_pending = not self._keypad_sidebar_open
+                        self._keypad_sidebar_request += 1
+                elif not keypad_sidebar_open:
+                    return {"accepted": False, "reason": "sidebar_closed"}
                 elif key in {"1", "2"}:
                     result = self.apply_pos_action(
                         "set_table",
@@ -282,6 +302,8 @@ class PosBridge:
 
             self._pickup_pending = None
             self.cancel_event.clear()
+            self._keypad_sidebar_open = False
+            self._keypad_sidebar_pending = False
             self._snapshot = {
                 "state": "PREPARING",
                 "mission_id": mission_id,
