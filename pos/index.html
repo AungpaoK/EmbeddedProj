@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="theme-color" content="#101a2b">
+    <meta name="theme-color" content="#f7f6ef">
     <meta name="description" content="หน้าจอควบคุมหุ่นยนต์ส่งอาหาร">
     <title>Robot POS</title>
     <link rel="stylesheet" href="/app.css">
@@ -17,79 +17,93 @@
 
       <main class="main">
         <section id="setup-view" class="setup-view" aria-labelledby="setup-heading">
-          <aside class="robot-panel">
-            <div class="robot-illustration" aria-hidden="true">
-              <div class="robot-antenna"></div>
-              <div class="robot-head">
-                <span class="robot-eye"></span>
-                <span class="robot-eye"></span>
-              </div>
-              <div class="robot-body">
-                <div class="robot-shelf"><span>ชั้น 1</span><span id="robot-table-1">ว่าง</span></div>
-                <div class="robot-shelf"><span>ชั้น 2</span><span id="robot-table-2">ว่าง</span></div>
-                <div class="robot-base"><i></i><i></i></div>
-              </div>
-            </div>
-            <div class="robot-caption">
-              <span class="caption-led"></span>
-              <span>พร้อมจัดรายการส่ง</span>
-            </div>
-          </aside>
+          <div class="robot-stage">
+            <button id="robot-trigger" class="robot-trigger" type="button" aria-expanded="false" aria-controls="order-sidebar" aria-label="เปิดรายการเลือกโต๊ะส่งอาหาร">
+              <span class="robot-illustration" aria-hidden="true">
+                <span class="robot-antenna"></span>
+                <span class="robot-head">
+                  <span class="robot-eye"></span>
+                  <span class="robot-eye"></span>
+                </span>
+                <span class="robot-body">
+                  <span class="robot-shelf"><span>ชั้น 1</span><span id="robot-table-1">ว่าง</span></span>
+                  <span class="robot-shelf"><span>ชั้น 2</span><span id="robot-table-2">ว่าง</span></span>
+                  <span class="robot-base"><i></i><i></i></span>
+                </span>
+                <span class="robot-shadow"></span>
+              </span>
+              <span class="robot-caption">
+                <span class="caption-led"></span>
+                <span>แตะหุ่นยนต์เพื่อเลือกโต๊ะ</span>
+              </span>
+            </button>
+            <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
 
-          <div class="order-panel">
-            <div class="section-heading">
-              <div>
-                <p class="eyebrow">KITCHEN · ORDER SETUP</p>
-                <h1 id="setup-heading">จัดรายการส่งอาหาร</h1>
-              </div>
-              <span class="capacity-tag">สูงสุด 2 รายการ</span>
-            </div>
-
-            <p class="instruction">เลือกโต๊ะสำหรับแต่ละชั้น แล้วยืนยันเมื่อวางอาหารเรียบร้อย</p>
-
-            <div class="order-cards">
-              <article class="order-card" data-order-card data-shelf="1">
-                <header class="order-card-heading">
-                  <div class="shelf-name">
-                    <span class="shelf-number">1</span>
-                    <span><strong>ชั้น 1</strong><small>TOP</small></span>
-                  </div>
-                  <button class="clear-button" type="button" data-action="clear" data-shelf="1" aria-label="ล้างชั้น 1" disabled>ล้าง</button>
-                </header>
-                <div class="table-options" role="group" aria-label="เลือกโต๊ะสำหรับชั้น 1">
-                  <button class="table-option" type="button" data-action="table" data-shelf="1" data-table="1" aria-pressed="false">โต๊ะ 1</button>
-                  <button class="table-option" type="button" data-action="table" data-shelf="1" data-table="2" aria-pressed="false">โต๊ะ 2</button>
+            <aside id="order-sidebar" class="order-sidebar" aria-hidden="true" inert aria-labelledby="setup-heading">
+              <header class="sidebar-heading">
+                <div>
+                  <p class="eyebrow">KITCHEN · ORDER SETUP</p>
+                  <h1 id="setup-heading">จัดรายการส่งอาหาร</h1>
                 </div>
-                <button class="loaded-button" type="button" data-action="loaded" data-shelf="1" aria-pressed="false" disabled>
-                  <span class="loaded-indicator"></span>
-                  <span>ยืนยันว่าใส่อาหารแล้ว</span>
-                </button>
-              </article>
+                <button id="sidebar-close" class="sidebar-close" type="button" aria-label="ปิดแผงเลือกโต๊ะ">×</button>
+              </header>
 
-              <article class="order-card" data-order-card data-shelf="2">
-                <header class="order-card-heading">
-                  <div class="shelf-name">
-                    <span class="shelf-number shelf-number--purple">2</span>
-                    <span><strong>ชั้น 2</strong><small>MID</small></span>
+              <p class="instruction">เลือกโต๊ะให้แต่ละชั้น แล้วยืนยันว่าใส่อาหารแล้ว</p>
+
+              <div class="order-cards">
+                <article class="order-card" data-order-card data-shelf="1">
+                  <header class="order-card-heading">
+                    <div class="shelf-name">
+                      <span class="shelf-number">1</span>
+                      <span><strong>ชั้น 1</strong><small>TOP</small></span>
+                    </div>
+                    <button class="clear-button" type="button" data-action="clear" data-shelf="1" aria-label="ล้างชั้น 1" disabled>ล้าง</button>
+                  </header>
+                  <div class="table-options" role="group" aria-label="เลือกโต๊ะสำหรับชั้น 1">
+                    <button class="table-option" type="button" data-action="table" data-shelf="1" data-table="1" aria-pressed="false">โต๊ะ 1</button>
+                    <button class="table-option" type="button" data-action="table" data-shelf="1" data-table="2" aria-pressed="false">โต๊ะ 2</button>
                   </div>
-                  <button class="clear-button" type="button" data-action="clear" data-shelf="2" aria-label="ล้างชั้น 2" disabled>ล้าง</button>
-                </header>
-                <div class="table-options" role="group" aria-label="เลือกโต๊ะสำหรับชั้น 2">
-                  <button class="table-option" type="button" data-action="table" data-shelf="2" data-table="1" aria-pressed="false">โต๊ะ 1</button>
-                  <button class="table-option" type="button" data-action="table" data-shelf="2" data-table="2" aria-pressed="false">โต๊ะ 2</button>
-                </div>
-                <button class="loaded-button" type="button" data-action="loaded" data-shelf="2" aria-pressed="false" disabled>
-                  <span class="loaded-indicator"></span>
-                  <span>ยืนยันว่าใส่อาหารแล้ว</span>
-                </button>
-              </article>
-            </div>
+                  <button class="loaded-button" type="button" data-action="loaded" data-shelf="1" aria-pressed="false" disabled>
+                    <span class="loaded-indicator"></span>
+                    <span>ยืนยันว่าใส่อาหารแล้ว</span>
+                  </button>
+                </article>
 
-            <p id="setup-message" class="setup-message" aria-live="polite">เลือกอย่างน้อยหนึ่งชั้นเพื่อเริ่มงาน</p>
-            <div id="completion-banner" class="completion-banner" role="status" hidden>
-              <span class="completion-check">✓</span>
-              <span id="completion-message">กลับถึงครัวแล้ว พร้อมรับงานรอบใหม่</span>
-            </div>
+                <article class="order-card" data-order-card data-shelf="2">
+                  <header class="order-card-heading">
+                    <div class="shelf-name">
+                      <span class="shelf-number shelf-number--purple">2</span>
+                      <span><strong>ชั้น 2</strong><small>MID</small></span>
+                    </div>
+                    <button class="clear-button" type="button" data-action="clear" data-shelf="2" aria-label="ล้างชั้น 2" disabled>ล้าง</button>
+                  </header>
+                  <div class="table-options" role="group" aria-label="เลือกโต๊ะสำหรับชั้น 2">
+                    <button class="table-option" type="button" data-action="table" data-shelf="2" data-table="1" aria-pressed="false">โต๊ะ 1</button>
+                    <button class="table-option" type="button" data-action="table" data-shelf="2" data-table="2" aria-pressed="false">โต๊ะ 2</button>
+                  </div>
+                  <button class="loaded-button" type="button" data-action="loaded" data-shelf="2" aria-pressed="false" disabled>
+                    <span class="loaded-indicator"></span>
+                    <span>ยืนยันว่าใส่อาหารแล้ว</span>
+                  </button>
+                </article>
+              </div>
+
+              <p id="setup-message" class="setup-message" aria-live="polite">เลือกอย่างน้อยหนึ่งชั้นเพื่อเริ่มงาน</p>
+              <div id="completion-banner" class="completion-banner" role="status" hidden>
+                <span class="completion-check">✓</span>
+                <span id="completion-message">กลับถึงครัวแล้ว พร้อมรับงานรอบใหม่</span>
+              </div>
+
+              <div class="sidebar-actions">
+                <span class="capacity-tag">สูงสุด 2 รายการ</span>
+                <button id="start-button" class="start-button" type="button" disabled>
+                  ส่งอาหาร
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="m9 5 7 7-7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </button>
+              </div>
+            </aside>
           </div>
         </section>
 
@@ -129,19 +143,6 @@
           <div id="mission-summary" class="mission-summary"></div>
         </section>
       </main>
-
-      <footer class="bottom-bar">
-        <div class="footer-note">
-          <span class="footer-shield" aria-hidden="true">●</span>
-          <span id="footer-status">ยืนยันการวางอาหารก่อนเริ่มจัดส่ง</span>
-        </div>
-        <button id="start-button" class="start-button" type="button" disabled>
-          เริ่มจัดส่ง
-          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <path d="m9 5 7 7-7 7" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-        </button>
-      </footer>
     </div>
   </body>
 </html>

@@ -8,12 +8,15 @@ const draft = {
 const elements = {
   connectionWarning: document.getElementById("connection-warning"),
   setupView: document.getElementById("setup-view"),
+  robotTrigger: document.getElementById("robot-trigger"),
+  orderSidebar: document.getElementById("order-sidebar"),
+  sidebarBackdrop: document.getElementById("sidebar-backdrop"),
+  sidebarClose: document.getElementById("sidebar-close"),
   deliveryView: document.getElementById("delivery-view"),
   setupMessage: document.getElementById("setup-message"),
   completionBanner: document.getElementById("completion-banner"),
   completionMessage: document.getElementById("completion-message"),
   startButton: document.getElementById("start-button"),
-  footerStatus: document.getElementById("footer-status"),
   deliveryTitle: document.getElementById("delivery-title"),
   deliveryMessage: document.getElementById("delivery-message"),
   deliveryDestination: document.getElementById("delivery-destination"),
@@ -34,6 +37,7 @@ let startPending = false;
 let pickupPendingFor = null;
 let lastError = "";
 let refreshInFlight = false;
+let sidebarOpen = false;
 
 function showSetupMessage(message, kind = "") {
   elements.setupMessage.textContent = message;
@@ -77,22 +81,18 @@ function renderDraft() {
   const canStart = selectedCount > 0 && allLoaded;
   elements.startButton.hidden = !setup;
   elements.startButton.disabled = !setup || !connected || !canStart || startPending;
-  if (!setup) {
-    const status = controllerState?.state;
-    elements.footerStatus.textContent = {
-      WAITING_PICKUP: "รอผู้ใช้ยืนยันว่ารับอาหารแล้ว",
-      RETURNING: "ส่งครบแล้ว กำลังกลับครัว",
-      ERROR: "หุ่นยนต์หยุดแล้ว กรุณาตรวจสอบ",
-    }[status] || "หุ่นยนต์กำลังดำเนินภารกิจ";
-    return;
-  }
-  elements.footerStatus.textContent = !connected
-    ? "กำลังรอการเชื่อมต่อ controller"
-    : selectedCount === 0
-      ? "เลือกโต๊ะอย่างน้อยหนึ่งชั้น"
-      : !allLoaded
-        ? "ยืนยันการวางอาหารให้ครบทุกชั้นที่เลือก"
-        : "ตรวจสอบรายการแล้ว พร้อมเริ่มจัดส่ง";
+  elements.robotTrigger.disabled = !setup;
+  if (!setup) setSidebarOpen(false);
+}
+
+function setSidebarOpen(open) {
+  sidebarOpen = Boolean(open) && isSetupState();
+  elements.setupView.classList.toggle("sidebar-open", sidebarOpen);
+  elements.orderSidebar.classList.toggle("is-open", sidebarOpen);
+  elements.orderSidebar.setAttribute("aria-hidden", String(!sidebarOpen));
+  elements.orderSidebar.toggleAttribute("inert", !sidebarOpen);
+  elements.sidebarBackdrop.hidden = !sidebarOpen;
+  elements.robotTrigger.setAttribute("aria-expanded", String(sidebarOpen));
 }
 
 function isSetupState() {
@@ -251,6 +251,7 @@ async function startMission() {
     for (const shelf of [1, 2]) {
       draft[shelf] = { table_id: null, loaded_confirmed: false };
     }
+    setSidebarOpen(false);
     showSetupMessage("รับรายการแล้ว กำลังเริ่มภารกิจ");
     await refreshState();
   } catch (error) {
@@ -317,6 +318,14 @@ document.addEventListener("click", (event) => {
     resetMission();
     return;
   }
+  if (button.id === "robot-trigger") {
+    setSidebarOpen(!sidebarOpen);
+    return;
+  }
+  if (button.id === "sidebar-close") {
+    setSidebarOpen(false);
+    return;
+  }
   if (!isSetupState()) return;
 
   const shelf = Number(button.dataset.shelf);
@@ -341,6 +350,11 @@ document.addEventListener("click", (event) => {
   }
 
   renderDraft();
+});
+
+elements.sidebarBackdrop.addEventListener("click", () => setSidebarOpen(false));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && sidebarOpen) setSidebarOpen(false);
 });
 
 refreshState();
