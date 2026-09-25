@@ -33,8 +33,9 @@ class Odometry:
     รันใน Background Thread แยกจาก FSM
     """
 
-    def __init__(self, ser: serial.Serial):
+    def __init__(self, ser: serial.Serial, keypad_handler=None):
         self._ser = ser
+        self._keypad_handler = keypad_handler
         self._lock = threading.Lock()
 
         # --- Pose State ---
@@ -122,6 +123,16 @@ class Odometry:
                     continue
 
                 raw = self._ser.readline().decode("utf-8", errors="ignore").strip()
+                if raw.startswith("KEY:"):
+                    key = raw[4:].strip().upper()
+                    if (
+                        self._keypad_handler is not None
+                        and len(key) == 1
+                        and key in "0123456789ABCD*#"
+                    ):
+                        self._keypad_handler(key)
+                    continue
+
                 if not raw.startswith("ENCODER:"):
                     continue
 

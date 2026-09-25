@@ -8,7 +8,8 @@ slam_bridge.py — Standalone SLAM & Teleop Bridge for ROS 2
   1. บริดจ์คำสั่งความเร็ว /cmd_vel (Twist) จากคีย์บอร์ด -> ส่ง V:v_L,v_R ให้ Arduino #1
   2. อ่าน Encoder จาก Arduino #1 -> Publish /odom และบรอดคาสต์ TF: odom -> base_link
   3. บรอดคาสต์ Static TF: base_link -> laser_frame (พร้อมชดเชย Yaw Offset)
-  4. หากยังไม่ได้ต่อ Arduino #1 จะเปิด Dummy TF ให้ทดสอบสแกนด้วย LiDAR เพียวๆ ได้
+  4. รับ KEY:<char> จาก Arduino แล้ว Publish /keypad/key ให้ระบบ POS
+  5. หากยังไม่ได้ต่อ Arduino #1 จะเปิด Dummy TF ให้ทดสอบสแกนด้วย LiDAR เพียวๆ ได้
 """
 
 import os
@@ -31,7 +32,7 @@ try:
     from geometry_msgs.msg import Twist, TransformStamped
     from nav_msgs.msg import Odometry as OdomMsg
     from sensor_msgs.msg import LaserScan
-    from std_msgs.msg import Bool
+    from std_msgs.msg import Bool, String
     import tf2_ros
     HAS_ROS2 = True
 except ImportError:
@@ -95,6 +96,7 @@ class SlamBridgeNode(Node):
         # Publishers & Subscribers
         self._odom_pub = self.create_publisher(OdomMsg, "/odom", 10)
         self._arduino_ready_pub = self.create_publisher(Bool, "/arduino/ready", 10)
+        self._keypad_pub = self.create_publisher(String, "/keypad/key", 10)
         self._cmd_sub = self.create_subscription(Twist, "/cmd_vel", self._cmd_vel_callback, 10)
         self._scan_pub = self.create_publisher(LaserScan, "/scan_filtered", qos_profile_sensor_data)
         self._scan_sub = self.create_subscription(
@@ -310,6 +312,15 @@ class SlamBridgeNode(Node):
                         self._update_odometry(l_ticks, r_ticks)
                     else:
                         logger.warning("Malformed encoder line from Arduino: %r", line)
+                elif line.startswith("KEY:"):
+                    key = line[4:].strip().upper()
+                    if len(key) == 1 and key in "0123456789ABCD*#":
+                        message = String()
+                        message.data = key
+                        self._keypad_pub.publish(message)
+                        logger.info("Arduino keypad: %s", key)
+                    else:
+                        logger.warning("Malformed keypad line from Arduino: %r", line)
                 else:
                     # Expose STATUS lines or a different firmware's output instead of
                     # silently discarding it; this distinguishes wrong protocol from no RX.

@@ -152,12 +152,14 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
 }
 .sidebar-close:hover { color: #17243a; background: #eef2f7; }
 .instruction { margin: 16px 0 22px; color: #77849a; font-size: 22px; line-height: 1.5; }
+.instruction small { color: #65748a; font-size: 17px; font-weight: 700; }
 .order-cards { display: grid; grid-template-columns: 1fr; gap: 14px; overflow-y: auto; }
 .order-card {
   min-width: 0; padding: 18px 20px;
   border: 1px solid #e1e8f1; border-radius: 18px;
   background: #fff; box-shadow: 0 5px 16px #20345608;
 }
+.order-card[data-active="true"] { border-color: #6f96f4; box-shadow: 0 0 0 2px #dce7ff; }
 .order-card-heading { display: flex; align-items: center; justify-content: space-between; }
 .shelf-name { display: flex; align-items: center; gap: 12px; }
 .shelf-number {

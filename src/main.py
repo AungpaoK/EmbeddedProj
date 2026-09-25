@@ -2,7 +2,7 @@
 """
 main.py — Food Delivery Robot Entry Point (Unified ROS 2 Hybrid System)
 =======================================================================
-จุดเริ่มต้นโปรแกรม: เชื่อมต่อ Serial (Dual Arduino), เริ่มต้นระบบ ROS 2 (LiDAR / SLAM)
+จุดเริ่มต้นโปรแกรม: เชื่อมต่อระบบ Motion/Keypad, เริ่มต้นระบบ ROS 2 (LiDAR / SLAM)
 เปิดใช้งาน LiDAR Safety Guard และ Continuous Waypoint Controller แล้วรัน Main FSM
 
 การรัน:
@@ -11,7 +11,7 @@ main.py — Food Delivery Robot Entry Point (Unified ROS 2 Hybrid System)
 ตัวเลือก Environment Variable:
     MOTION_BACKEND     — serial (เดิม) หรือ ros (ให้ slam_bridge ถือ Arduino)
     MOTION_PORT        — Serial port ของ Arduino #1  (default: /dev/ttyACM0)
-    SHELF_PORT         — Serial port ของ Arduino #2  (default: none)
+    SHELF_PORT         — พอร์ต Shelf controller รุ่นเดิม (ปกติใช้ none)
     BAUD_RATE          — Baud rate ทั้งสอง port       (default: 115200)
     LIDAR_YAW_OFFSET   — องศาชดเชยการวาง LiDAR เทียบกับหน้ารถ (default: 0.0)
     LIDAR_STOP_DIST    — ระยะหยุดฉุกเฉิน LiDAR (เมตร, default: 0.30)
@@ -52,7 +52,7 @@ try:
     from sensor_msgs.msg import LaserScan
     from geometry_msgs.msg import Twist
     from nav_msgs.msg import Odometry as RosOdomMsg
-    from std_msgs.msg import Bool
+    from std_msgs.msg import Bool, String
     HAS_ROS2 = True
 except ImportError:
     HAS_ROS2 = False
@@ -113,9 +113,10 @@ def _open_serial(port: str, baud: int, timeout: float, label: str, optional: boo
 # ===========================================================
 if HAS_ROS2:
     class DeliveryRobotRosNode(Node):
-        def __init__(self, safety_guard: LidarSafetyGuard):
+        def __init__(self, safety_guard: LidarSafetyGuard, keypad_handler=None):
             super().__init__("delivery_robot_node")
             self._safety = safety_guard
+            self._keypad_handler = keypad_handler
             self.latest_odom_pose = None
             self.latest_odom_time = 0.0
             self.motion_ready = False
@@ -143,6 +144,12 @@ if HAS_ROS2:
                 self._ready_callback,
                 10,
             )
+            self._keypad_sub = self.create_subscription(
+                String,
+                "/keypad/key",
+                self._keypad_callback,
+                10,
+            )
             self.get_logger().info("ROS 2 DeliveryRobotRosNode initialized.")
 
         def _odom_callback(self, msg: RosOdomMsg):
@@ -155,6 +162,10 @@ if HAS_ROS2:
 
         def _ready_callback(self, msg: Bool):
             self.motion_ready = bool(msg.data)
+
+        def _keypad_callback(self, msg: String):
+            if self._keypad_handler is not None:
+                self._keypad_handler(msg.data)
 
         def odom_is_fresh(self, max_age_s: float = 1.0) -> bool:
             return bool(
@@ -236,6 +247,10 @@ def main() -> None:
         yaw_offset_deg=yaw_offset,
     )
 
+    # POS owns the shared setup draft. Touchscreen and keypad both update this
+    # same bridge, so their selections cannot drift apart.
+    pos_bridge = PosBridge()
+
     # --- Start the selected motion transport ---
     ros_node = None
     ros_thread = None
@@ -244,7 +259,7 @@ def main() -> None:
             logger.critical("MOTION_BACKEND=ros requires ROS 2 (rclpy and message packages).")
             sys.exit(1)
         rclpy.init()
-        ros_node = DeliveryRobotRosNode(safety_guard)
+        ros_node = DeliveryRobotRosNode(safety_guard, pos_bridge.handle_keypad_key)
         ros_thread = threading.Thread(target=rclpy.spin, args=(ros_node,), daemon=True)
         ros_thread.start()
         motion_ser = None
@@ -253,7 +268,7 @@ def main() -> None:
     else:
         motion_ser = _open_serial(motion_port, baud, SERIAL_TIMEOUT, "Motion")
         motion = MotionClient(motion_ser)
-        odometry = Odometry(motion_ser)
+        odometry = Odometry(motion_ser, keypad_handler=pos_bridge.handle_keypad_key)
 
     # Shelf serial remains owned by main.py; it is a separate optional device.
     shelf_ser = _open_serial(shelf_port, baud, SERIAL_TIMEOUT, "Shelf", optional=True)
@@ -268,7 +283,7 @@ def main() -> None:
     # --- ROS 2 Node Spin (Optional for serial backend) ---
     if HAS_ROS2 and ros_node is None:
         rclpy.init()
-        ros_node = DeliveryRobotRosNode(safety_guard)
+        ros_node = DeliveryRobotRosNode(safety_guard, pos_bridge.handle_keypad_key)
         ros_thread = threading.Thread(target=rclpy.spin, args=(ros_node,), daemon=True)
         ros_thread.start()
         logger.info("[main] ROS 2 background subscriber thread started.")
@@ -304,7 +319,6 @@ def main() -> None:
     logger.info("[main] All subsystems started. Launching Main FSM.")
 
     # --- Local POS Server and Main FSM ---
-    pos_bridge = PosBridge()
     fsm = DeliveryFSM(
         motion=motion,
         odometry=odometry,

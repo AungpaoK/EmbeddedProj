@@ -38,6 +38,12 @@ class PosBridge:
         self.resets: queue.Queue[bool] = queue.Queue(maxsize=1)
         self._lock = threading.RLock()
         self._pickup_pending: tuple[str, int] | None = None
+        self._draft: dict[int, dict] = {
+            1: {"table_id": None, "loaded_confirmed": False},
+            2: {"table_id": None, "loaded_confirmed": False},
+        }
+        self._active_shelf = 1
+        self._setup_message = "เลือกชั้นและโต๊ะเพื่อเริ่มงาน"
         self._snapshot: dict = {
             "state": "IDLE",
             "mission_id": None,
@@ -52,7 +58,156 @@ class PosBridge:
             return {
                 **self._snapshot,
                 "orders": [dict(order) for order in self._snapshot["orders"]],
+                "draft": {
+                    str(shelf): dict(selection)
+                    for shelf, selection in self._draft.items()
+                },
+                "active_shelf": self._active_shelf,
+                "setup_message": self._setup_message,
             }
+
+    def apply_pos_action(
+        self,
+        action: object,
+        *,
+        shelf: object = None,
+        table_id: object = None,
+    ) -> dict:
+        """Apply one setup action shared by the touchscreen and keypad."""
+        if not isinstance(action, str):
+            raise PosRequestError(400, "ไม่พบคำสั่ง POS")
+
+        action = action.strip().lower()
+        if action == "start":
+            return self._submit_draft_mission()
+
+        with self._lock:
+            if self._snapshot["state"] not in {"IDLE", "COMPLETED"}:
+                raise PosRequestError(409, "แก้รายการได้เฉพาะขณะหุ่นยนต์รอรับงาน")
+
+            if action == "clear_all":
+                self._clear_draft_locked()
+                self._setup_message = "ล้างรายการทั้งหมดแล้ว"
+                return {"accepted": True}
+
+            if type(shelf) is not int or shelf not in (1, 2):
+                raise PosRequestError(400, "ชั้นต้องเป็น 1 หรือ 2")
+            self._active_shelf = shelf
+            selection = self._draft[shelf]
+
+            if action == "select_shelf":
+                self._setup_message = f"เลือกชั้น {shelf} แล้ว"
+            elif action == "set_table":
+                if type(table_id) is not int or table_id not in (1, 2):
+                    raise PosRequestError(400, "โต๊ะต้องเป็น 1 หรือ 2")
+                if selection["table_id"] == table_id:
+                    selection["table_id"] = None
+                    selection["loaded_confirmed"] = False
+                    self._setup_message = f"ยกเลิกโต๊ะของชั้น {shelf} แล้ว"
+                else:
+                    selection["table_id"] = table_id
+                    selection["loaded_confirmed"] = False
+                    self._setup_message = f"เลือกโต๊ะ {table_id} สำหรับชั้น {shelf} แล้ว"
+            elif action == "toggle_loaded":
+                if selection["table_id"] is None:
+                    raise PosRequestError(409, f"กรุณาเลือกโต๊ะให้ชั้น {shelf} ก่อน")
+                selection["loaded_confirmed"] = not selection["loaded_confirmed"]
+                self._setup_message = (
+                    f"ยืนยันแล้วว่าวางอาหารบนชั้น {shelf}"
+                    if selection["loaded_confirmed"]
+                    else f"ยกเลิกการยืนยันชั้น {shelf}"
+                )
+            elif action == "clear_shelf":
+                self._draft[shelf] = {
+                    "table_id": None,
+                    "loaded_confirmed": False,
+                }
+                self._setup_message = f"ล้างรายการชั้น {shelf} แล้ว"
+            else:
+                raise PosRequestError(400, "คำสั่ง POS ไม่ถูกต้อง")
+
+            return {"accepted": True}
+
+    def handle_keypad_key(self, raw_key: object) -> dict:
+        """Map a physical keypad key onto the current POS state.
+
+        This callback never raises because it runs from a serial/ROS worker.
+        Rejected keys are logged and returned to the caller for tests.
+        """
+        if not isinstance(raw_key, str):
+            return {"accepted": False, "reason": "invalid_key"}
+        key = raw_key.strip().upper()
+        if len(key) != 1 or key not in "0123456789ABCD*#":
+            return {"accepted": False, "reason": "invalid_key"}
+
+        try:
+            with self._lock:
+                state = self._snapshot["state"]
+                active_shelf = self._active_shelf
+                mission_id = self._snapshot["mission_id"]
+                order_index = self._snapshot["current_order_index"]
+
+            if state in {"IDLE", "COMPLETED"}:
+                if key == "A":
+                    result = self.apply_pos_action("select_shelf", shelf=1)
+                elif key == "B":
+                    result = self.apply_pos_action("select_shelf", shelf=2)
+                elif key in {"1", "2"}:
+                    result = self.apply_pos_action(
+                        "set_table",
+                        shelf=active_shelf,
+                        table_id=int(key),
+                    )
+                elif key == "C":
+                    result = self.apply_pos_action(
+                        "toggle_loaded",
+                        shelf=active_shelf,
+                    )
+                elif key == "D":
+                    result = self.apply_pos_action(
+                        "clear_shelf",
+                        shelf=active_shelf,
+                    )
+                elif key == "*":
+                    result = self.apply_pos_action("clear_all")
+                elif key == "#":
+                    result = self.apply_pos_action("start")
+                else:
+                    return {"accepted": False, "reason": "unused_key"}
+            elif state == "WAITING_PICKUP" and key == "#":
+                result = self.confirm_pickup(mission_id, order_index)
+            elif state == "ERROR" and key == "*":
+                result = self.request_reset()
+            else:
+                return {"accepted": False, "reason": "ignored_in_state"}
+
+            logger.info("Accepted keypad key %s in POS state %s", key, state)
+            response = dict(result)
+            response.setdefault("accepted", True)
+            return response
+        except PosRequestError as exc:
+            logger.warning("Rejected keypad key %s: %s", key, exc.message)
+            return {"accepted": False, "reason": exc.message}
+
+    def _submit_draft_mission(self) -> dict:
+        with self._lock:
+            orders = [
+                {
+                    "shelf": shelf,
+                    "table_id": selection["table_id"],
+                    "loaded_confirmed": selection["loaded_confirmed"],
+                }
+                for shelf, selection in self._draft.items()
+                if selection["table_id"] is not None
+            ]
+        return self.submit_mission(orders)
+
+    def _clear_draft_locked(self) -> None:
+        self._draft = {
+            1: {"table_id": None, "loaded_confirmed": False},
+            2: {"table_id": None, "loaded_confirmed": False},
+        }
+        self._active_shelf = 1
 
     def submit_mission(self, raw_orders: object) -> dict:
         orders = self._validate_orders(raw_orders)
@@ -76,6 +231,8 @@ class PosBridge:
                 "message": "รับรายการแล้ว กำลังเตรียมหุ่นยนต์",
                 "error": None,
             }
+            self._clear_draft_locked()
+            self._setup_message = "รับรายการแล้ว กำลังเริ่มภารกิจ"
             logger.info("Accepted POS mission %s with %d order(s)", mission_id, len(orders))
             return {"mission_id": mission_id, "state": "PREPARING"}
 
@@ -137,6 +294,8 @@ class PosBridge:
             }
             if state != "WAITING_PICKUP":
                 self._pickup_pending = None
+            if state in {"IDLE", "COMPLETED"}:
+                self._setup_message = message
 
     def confirm_pickup(self, mission_id: object, order_index: object) -> dict:
         with self._lock:
@@ -215,6 +374,15 @@ class PosRequestHandler(BaseHTTPRequestHandler):
             path = urlsplit(self.path).path
             if path == "/api/mission/start":
                 response = self.bridge.submit_mission(payload.get("orders") if isinstance(payload, dict) else None)
+                self._send_json(202, response)
+            elif path == "/api/pos/action":
+                if not isinstance(payload, dict):
+                    raise PosRequestError(400, "รูปแบบคำขอไม่ถูกต้อง")
+                response = self.bridge.apply_pos_action(
+                    payload.get("action"),
+                    shelf=payload.get("shelf"),
+                    table_id=payload.get("table_id"),
+                )
                 self._send_json(202, response)
             elif path == "/api/mission/pickup-confirmed":
                 if not isinstance(payload, dict):

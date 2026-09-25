@@ -29,9 +29,16 @@ the POS and FSM but does not start the ROS bridge, LiDAR, or kiosk.
 
 For a mission, choose a destination for each used shelf and confirm that food
 has been placed on every selected shelf. The robot visits shelf 1's table
-before shelf 2's table. At each destination, confirm pickup on the touchscreen.
-A browser reload reconnects to the current controller state. Physical shelf
-sensors and the override button are only used when Arduino #2 is configured.
+before shelf 2's table. At each destination, confirm pickup on the touchscreen
+or press `#` on the physical keypad. The setup draft is stored by the Python
+controller, so touchscreen and keypad actions update the same data and a browser
+reload restores the current selections.
+
+The 4x4 keypad is connected to the motion Arduino through a PCF8574 on A4/A5.
+In setup mode use `A`/`B` for shelf 1/2, `1`/`2` for the table, `C` to confirm
+food loading, `D` to clear the active shelf, `#` to start, and `*` to clear all.
+While waiting at a table `#` confirms pickup; in `ERROR`, `*` requests a mission
+reset. Keys are ignored while the robot is moving.
 
 ## Ubuntu Desktop kiosk startup
 

@@ -6,8 +6,8 @@
 
 ### อุปกรณ์
 
-- Raspberry Pi ที่เชื่อมต่อกับ Arduino มอเตอร์ (Arduino #1) และ LiDAR
-- Arduino #2 สำหรับเซนเซอร์ชั้นวางและปุ่ม Manual Override เป็นอุปกรณ์เสริม
+- Raspberry Pi ที่เชื่อมต่อกับ Arduino Uno สำหรับมอเตอร์, Encoder, MAX7219 และ Keypad
+- Keypad 4x4 ต่อผ่าน PCF8574 ที่ A4 (SDA) และ A5 (SCL); ระบบนี้ไม่ใช้ LCD
 - ก่อนทดลองสั่งวิ่ง ให้ยกล้อขับเคลื่อนพ้นพื้นหรือถอดไฟจากมอเตอร์ไดรเวอร์
 
 ### ซอฟต์แวร์
@@ -49,7 +49,7 @@ sudo usermod -aG dialout "$USER"
 
 ## 3. เตรียม firmware ของ Arduino
 
-Arduino #1 ต้องใช้ firmware ใน `src/Arduino_1_Motion/Arduino_1_Motion.ino` ถ้ายังไม่ได้แฟลช ให้หยุด SLAM bridge ก่อน แล้วรัน:
+Arduino Uno ต้องใช้ firmware ใน `src/Arduino_1_Motion/Arduino_1_Motion.ino` ซึ่งรวมมอเตอร์ Encoder, MAX7219 และ Keypad แล้ว ถ้ายังไม่ได้แฟลช ให้หยุด SLAM bridge ก่อน แล้วรัน:
 
 ```bash
 cd /home/jk/EmbeddedProj
@@ -58,13 +58,11 @@ bash flash_motion.sh
 
 สคริปต์ตรวจพอร์ตและคอมไพล์ก่อนอัปโหลด จากนั้นให้พิมพ์ `FLASH` เพื่อยืนยัน ตรวจสอบว่าพอร์ตที่เลือกเป็น Arduino มอเตอร์ และยกล้อพ้นพื้นหรือถอดไฟมอเตอร์ไดรเวอร์ในการทดสอบครั้งแรก [สคริปต์แฟลช firmware](/home/jk/EmbeddedProj/flash_motion.sh)
 
-Arduino #2 ไม่จำเป็นสำหรับเริ่มใช้ POS ค่าตั้งต้น `SHELF_SERIAL_PORT` คือ `none` จึงเลือก `VirtualShelfClient` แทน หากต้องการใช้บอร์ดจริง ให้กำหนดพอร์ต เช่น:
+ต่อ PCF8574 ของ Keypad ดังนี้: VCC ไป 5V, GND ไป GND, SDA ไป A4 และ SCL ไป A5 โดยค่า Address เริ่มต้นในโค้ดคือ `0x20` ขา Encoder ปัจจุบันใช้ A0–A3 จึงไม่ชนกับบัส I2C ส่วนลำดับขา Keypad บน PCF8574 คือ Row ไป P7–P4 และ Column ไป P3–P0
 
-```dotenv
-SHELF_PORT=/dev/serial/by-id/<Arduino-ชั้นวาง>
-```
+Keypad ส่งข้อมูลผ่าน USB Serial เส้นเดียวกับมอเตอร์และ Encoder จากนั้น `slam_bridge` เผยแพร่เป็น ROS topic `/keypad/key` ให้ POS รับต่อ จึงห้ามเปิด Serial Monitor หรือโปรแกรมอื่นจับพอร์ต Arduino พร้อมกับระบบหลัก
 
-firmware ปัจจุบันของ Arduino #2 กำหนดปุ่ม Override ไว้ที่ D13; ตรวจ wiring ให้ตรงกับ [Arduino_2_Shelf.ino](/home/jk/EmbeddedProj/src/Arduino_2_Shelf/Arduino_2_Shelf.ino:34) ก่อนต่อใช้งาน
+การใช้งานปุ่มในหน้าตั้งค่า: `A/B` เลือกชั้น 1/2, `1/2` เลือกโต๊ะ, `C` ยืนยันการวางอาหาร, `D` ล้างชั้นปัจจุบัน, `#` เริ่มส่ง และ `*` ล้างทั้งหมด เมื่อถึงโต๊ะให้กด `#` เพื่อยืนยันรับอาหาร และเมื่ออยู่ในสถานะ Error ให้กด `*` เพื่อรีเซ็ตภารกิจ
 
 ## 4. เปิดระบบทั้งหมดด้วยสคริปต์เดียว
 
@@ -122,6 +120,7 @@ ssh -N -L 8765:127.0.0.1:8765 <user>@<IP-ของ-Pi>
 
 ```bash
 ros2 topic echo /arduino/ready --once
+ros2 topic echo /keypad/key
 ros2 topic hz /scan
 ros2 topic hz /odom
 ros2 topic echo /map --once
@@ -130,7 +129,7 @@ curl http://127.0.0.1:8765/api/health
 
 `/arduino/ready` ควรแสดง `data: true`, `/scan` และ `/odom` ควรมีข้อมูลต่อเนื่อง และ health endpoint ควรตอบ `{"ok": true}` จากนั้นทดลองเคลื่อนที่โดยไม่มีอาหารก่อน และตรวจว่าพิกัดทางแยกกับโต๊ะตรงกับพื้นที่จริง
 
-ตัวควบคุม LiDAR หยุดรถเมื่อพบวัตถุในกรวยด้านหน้าและเดินต่อเมื่อทางโล่ง แต่ไม่ได้วางแผนอ้อมสิ่งกีดขวาง ระบบส่งอาหารให้ยืนยันรับอาหารผ่าน POS, Terminal console หรือปุ่ม physical override; เซนเซอร์ IR ไม่ได้ใช้ตัดสินการรับอาหาร
+ตัวควบคุม LiDAR หยุดรถเมื่อพบวัตถุในกรวยด้านหน้าและเดินต่อเมื่อทางโล่ง แต่ไม่ได้วางแผนอ้อมสิ่งกีดขวาง ระบบส่งอาหารให้ยืนยันรับอาหารผ่าน POS, Terminal console หรือปุ่ม `#` บน Keypad
 
 ## 7. ปิดระบบ
 

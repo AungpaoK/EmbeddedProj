@@ -102,6 +102,74 @@ class PosServerTests(unittest.TestCase):
         )
         self.assertEqual(status, 409)
 
+    def test_touchscreen_actions_share_a_server_side_draft(self):
+        status, _ = self.post_json(
+            "/api/pos/action",
+            {"action": "set_table", "shelf": 1, "table_id": 2},
+            origin=self.origin,
+        )
+        self.assertEqual(status, 202)
+        status, _ = self.post_json(
+            "/api/pos/action",
+            {"action": "toggle_loaded", "shelf": 1},
+            origin=self.origin,
+        )
+        self.assertEqual(status, 202)
+
+        _, snapshot = self.get_json("/api/state")
+        self.assertEqual(snapshot["draft"]["1"]["table_id"], 2)
+        self.assertTrue(snapshot["draft"]["1"]["loaded_confirmed"])
+        self.assertEqual(snapshot["active_shelf"], 1)
+
+        status, accepted = self.post_json(
+            "/api/pos/action",
+            {"action": "start"},
+            origin=self.origin,
+        )
+        self.assertEqual(status, 202)
+        self.assertTrue(accepted["mission_id"])
+        mission = self.bridge.take_mission(timeout=0.1)
+        self.assertEqual(
+            mission["orders"],
+            [{"shelf": 1, "table_id": 2, "loaded_confirmed": True}],
+        )
+
+    def test_keypad_builds_mission_and_uses_contextual_confirm_keys(self):
+        for key in ("A", "1", "C", "B", "2", "C", "#"):
+            result = self.bridge.handle_keypad_key(key)
+            self.assertTrue(result["accepted"], (key, result))
+
+        mission = self.bridge.take_mission(timeout=0.1)
+        self.assertEqual(
+            mission["orders"],
+            [
+                {"shelf": 1, "table_id": 1, "loaded_confirmed": True},
+                {"shelf": 2, "table_id": 2, "loaded_confirmed": True},
+            ],
+        )
+        self.bridge.set_state(
+            "WAITING_PICKUP",
+            message="รอรับอาหาร",
+            current_order_index=0,
+        )
+        result = self.bridge.handle_keypad_key("#")
+        self.assertTrue(result["accepted"])
+        self.assertEqual(
+            self.bridge.take_pickup_confirmation(timeout=0.1),
+            (mission["mission_id"], 0),
+        )
+
+        self.bridge.set_state("ERROR", message="ทดสอบ", error="ทดสอบ")
+        result = self.bridge.handle_keypad_key("*")
+        self.assertTrue(result["accepted"])
+        self.assertTrue(self.bridge.take_reset(timeout=0.1))
+
+    def test_keypad_is_ignored_while_robot_is_moving(self):
+        self.bridge.set_state("NAVIGATING", message="กำลังเดินทาง")
+        result = self.bridge.handle_keypad_key("1")
+        self.assertFalse(result["accepted"])
+        self.assertEqual(result["reason"], "ignored_in_state")
+
     def test_pickup_confirmation_is_bound_to_current_mission_and_order(self):
         mission = self.bridge.submit_mission(
             [{"shelf": 1, "table_id": 2, "loaded_confirmed": True}]

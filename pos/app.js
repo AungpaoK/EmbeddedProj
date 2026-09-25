@@ -38,6 +38,7 @@ let pickupPendingFor = null;
 let lastError = "";
 let refreshInFlight = false;
 let sidebarOpen = false;
+let activeShelf = 1;
 
 function showSetupMessage(message, kind = "") {
   elements.setupMessage.textContent = message;
@@ -52,6 +53,7 @@ function renderDraft() {
   for (const shelf of [1, 2]) {
     const selection = draft[shelf];
     const card = document.querySelector('[data-order-card][data-shelf="' + shelf + '"]');
+    card.dataset.active = String(shelf === activeShelf);
     const isSelected = selection.table_id !== null;
     if (isSelected) {
       selectedCount += 1;
@@ -131,6 +133,19 @@ function renderState(snapshot) {
   controllerState = snapshot;
   const state = snapshot.state || "IDLE";
   const setup = isSetupState();
+
+  const sharedDraft = snapshot.draft || {};
+  for (const shelf of [1, 2]) {
+    const selection = sharedDraft[String(shelf)] || sharedDraft[shelf] || {};
+    draft[shelf] = {
+      table_id: Number.isInteger(selection.table_id) ? selection.table_id : null,
+      loaded_confirmed: selection.loaded_confirmed === true,
+    };
+  }
+  activeShelf = [1, 2].includes(snapshot.active_shelf) ? snapshot.active_shelf : 1;
+  if (setup && snapshot.setup_message) {
+    showSetupMessage(snapshot.setup_message);
+  }
 
   elements.connectionWarning.hidden = connected;
   elements.setupView.hidden = !setup;
@@ -228,15 +243,8 @@ async function refreshState() {
 }
 
 async function startMission() {
-  const orders = [1, 2]
-    .filter((shelf) => draft[shelf].table_id !== null)
-    .map((shelf) => ({
-      shelf,
-      table_id: draft[shelf].table_id,
-      loaded_confirmed: draft[shelf].loaded_confirmed,
-    }));
-
-  if (orders.length === 0 || orders.some((order) => !order.loaded_confirmed)) {
+  const selected = [1, 2].filter((shelf) => draft[shelf].table_id !== null);
+  if (selected.length === 0 || selected.some((shelf) => !draft[shelf].loaded_confirmed)) {
     showSetupMessage("เลือกโต๊ะและยืนยันการวางอาหารให้ครบก่อนเริ่ม", "error");
     return;
   }
@@ -244,13 +252,10 @@ async function startMission() {
   startPending = true;
   renderDraft();
   try {
-    await requestJson("/api/mission/start", {
+    await requestJson("/api/pos/action", {
       method: "POST",
-      body: JSON.stringify({ orders }),
+      body: JSON.stringify({ action: "start" }),
     });
-    for (const shelf of [1, 2]) {
-      draft[shelf] = { table_id: null, loaded_confirmed: false };
-    }
     setSidebarOpen(false);
     showSetupMessage("รับรายการแล้ว กำลังเริ่มภารกิจ");
     await refreshState();
@@ -259,6 +264,21 @@ async function startMission() {
   } finally {
     startPending = false;
     renderDraft();
+  }
+}
+
+async function applySetupAction(action, shelf = null, tableId = null) {
+  const payload = { action };
+  if (shelf !== null) payload.shelf = shelf;
+  if (tableId !== null) payload.table_id = tableId;
+  try {
+    await requestJson("/api/pos/action", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    await refreshState();
+  } catch (error) {
+    showSetupMessage(error.message, "error");
   }
 }
 
@@ -334,22 +354,12 @@ document.addEventListener("click", (event) => {
 
   if (button.dataset.action === "table") {
     const table = Number(button.dataset.table);
-    selection.table_id = selection.table_id === table ? null : table;
-    selection.loaded_confirmed = false;
-    showSetupMessage(selection.table_id === null
-      ? "เลือกอย่างน้อยหนึ่งชั้นเพื่อเริ่มงาน"
-      : "เลือกโต๊ะ " + table + " สำหรับชั้น " + shelf + " แล้ว");
+    applySetupAction("set_table", shelf, table);
   } else if (button.dataset.action === "loaded" && selection.table_id !== null) {
-    selection.loaded_confirmed = !selection.loaded_confirmed;
-    showSetupMessage(selection.loaded_confirmed
-      ? "ยืนยันแล้วว่าวางอาหารบนชั้น " + shelf
-      : "ยกเลิกการยืนยันชั้น " + shelf);
+    applySetupAction("toggle_loaded", shelf);
   } else if (button.dataset.action === "clear") {
-    draft[shelf] = { table_id: null, loaded_confirmed: false };
-    showSetupMessage("ล้างรายการชั้น " + shelf + " แล้ว");
+    applySetupAction("clear_shelf", shelf);
   }
-
-  renderDraft();
 });
 
 elements.sidebarBackdrop.addEventListener("click", () => setSidebarOpen(false));

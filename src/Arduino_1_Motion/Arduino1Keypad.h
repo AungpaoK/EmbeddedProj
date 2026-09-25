@@ -13,10 +13,9 @@
     PCF8574 VCC -> Arduino 5V
     PCF8574 GND -> Arduino GND
 
-  คำเตือนสำคัญ:
-    A4/A5 ต้องว่างจริงก่อนใช้งาน เพราะ A4 คือ SDA และ A5 คือ SCL
-    โค้ด Motion ปัจจุบันใช้ A4/A5 กับ Encoder ซ้าย จึงต้องย้าย Encoder
-    และแก้ส่วนอ่าน Encoder ให้เรียบร้อยก่อนเปิดใช้โมดูลนี้
+  ขาปัจจุบัน:
+    A4/A5 ใช้เป็น SDA/SCL สำหรับ PCF8574
+    Encoder ขวาใช้ A0/A1 และ Encoder ซ้ายใช้ A2/A3 จึงไม่ชนกับ I2C
 
   วิธีเรียกจาก Arduino_1_Motion.ino:
 
@@ -85,6 +84,13 @@ inline char readKey() {
 
 // อ่านปุ่มแล้วส่ง KEY:<ปุ่ม> ให้ Raspberry Pi
 inline void updateAndSendToPi(Stream &serialPort) {
+  static unsigned long lastScanMs = 0;
+  const unsigned long nowMs = millis();
+  if (nowMs - lastScanMs < 10) {
+    return;
+  }
+  lastScanMs = nowMs;
+
   char key = readKey();
 
   if (key != NO_KEY) {

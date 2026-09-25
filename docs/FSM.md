@@ -4,9 +4,9 @@
 
 การทำงานจริงของ main.py รับรายการจาก POS ผ่าน HTTP ใน process เดียวกัน เว็บ
 ส่งคำสั่งเข้าคิว thread-safe และ Main FSM เป็นผู้ควบคุมการเคลื่อนที่เอง
-ผู้ใช้เลือกปลายทางให้ชั้นที่ใช้งานและยืนยันว่าของวางแล้ว จากนั้นยืนยันการรับ
-อาหารที่แต่ละโต๊ะผ่านหน้าจอ หรือใช้ physical override เดิมแทนการยืนยันได้
-รุ่นนี้ยังไม่ใช้ IR sensor สำหรับตรวจวางหรือหยิบอาหาร
+ผู้ใช้เลือกปลายทางให้ชั้นที่ใช้งานและยืนยันว่าของวางแล้วผ่านหน้าจอสัมผัส
+หรือ Keypad 4x4 จากนั้นยืนยันการรับอาหารที่แต่ละโต๊ะผ่านหน้าจอหรือกด `#`
+บน Keypad รุ่นนี้ไม่ใช้ LCD หรือ IR sensor สำหรับตรวจวางและหยิบอาหาร
 
 ```mermaid
 stateDiagram-v2
@@ -14,7 +14,7 @@ stateDiagram-v2
 
     WaitForPOS: รอรายการจาก POS
     Delivering: ส่งอาหาร (เรียกใช้ Motion Sub-FSM)
-    WaitForPickup: รอ POS ยืนยันรับอาหาร หรือ physical override
+    WaitForPickup: รอ POS หรือ Keypad ยืนยันรับอาหาร
     CheckRemaining: มีอาหารที่ยังไม่ส่ง?
     ReturnStation: กลับ station (เรียกใช้ Motion Sub-FSM)
     Error: หยุดการเคลื่อนที่และรอการตรวจสอบ
@@ -27,6 +27,7 @@ stateDiagram-v2
     CheckRemaining --> ReturnStation: ไม่มี
     ReturnStation --> WaitForPOS: Motion Sub-FSM เสร็จสิ้น (ถึง Station)
     ReturnStation --> Error: กลับ station ไม่สำเร็จ
+    Error --> WaitForPOS: ผู้ใช้รีเซ็ตผ่าน POS หรือกด * บน Keypad
 ```
 
 รายการส่งเรียงตามหมายเลขชั้นจากน้อยไปมาก (ชั้น 1 ก่อนชั้น 2) เมื่อรอรับอาหาร

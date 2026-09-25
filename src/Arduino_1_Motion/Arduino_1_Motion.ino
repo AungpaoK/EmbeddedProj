@@ -7,21 +7,24 @@
  *   - รับคำสั่ง Serial จาก Raspberry Pi: FORWARD:<m>  TURN:<deg>  STOP
  *   - ขับมอเตอร์ด้วย Dual PID Speed Control + Wheel Sync (50 Hz loop)
  *   - ส่ง ENCODER:L,R ทุก 100ms ให้ Pi คำนวณ Odometry
+ *   - อ่าน Keypad 4x4 ผ่าน PCF8574 และส่ง KEY:<char> ให้ POS
  *   - ส่ง STATUS:DONE เมื่อทำคำสั่งเสร็จ, STATUS:ERROR เมื่อเกิดปัญหา
  *
  * Serial Protocol:
  *   รับ:  FORWARD:<distance_m>\n  |  TURN:<degrees>\n  |  STOP\n
  *         INDICATOR:LEFT\n  |  INDICATOR:RIGHT\n  |  INDICATOR:OFF\n
- *   ส่ง:  STATUS:DONE\n  |  STATUS:ERROR\n  |  ENCODER:<L>,<R>\n
+ *   ส่ง:  STATUS:DONE\n  |  STATUS:ERROR\n  |  ENCODER:<L>,<R>\n  |  KEY:<char>\n
  *
  * Pin Map (อ้างอิง robotconfig.h):
  *   D7=IN4, D8=IN1, D9=IN2, D10=ENA, D11=ENB, D12=IN3
  *   A0=RIGHT_ENC_A, A1=RIGHT_ENC_B, A3=LEFT_ENC_A, A2=LEFT_ENC_B
+ *   A4=SDA, A5=SCL สำหรับ PCF8574 Keypad (address 0x20)
  */
 
 #include "robotconfig.h"
 #include "Arduino.h"
 #include "TurnIndicator.h"
+#include "Arduino1Keypad.h"
 
 // ============================================================
 // Encoder Sign Convention
@@ -486,6 +489,7 @@ void executeVelocity(float dt) {
 void setup() {
     Serial.begin(115200);
     turnIndicatorBegin();
+    Arduino1Keypad::begin();
 
     // กำหนด Pin ควบคุมมอเตอร์ L298 ตาม robotconfig.h
     pinMode(IN1, OUTPUT);
@@ -505,6 +509,7 @@ void setup() {
 
 void loop() {
     updateTurnIndicator();
+    Arduino1Keypad::updateAndSendToPi(Serial);
     unsigned long now = millis();
 
     // --- 50 Hz PID/Motion Loop ---
