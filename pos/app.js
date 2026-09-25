@@ -6,11 +6,7 @@ const draft = {
 };
 
 const elements = {
-  status: document.querySelector(".topbar-center"),
-  statusLabel: document.getElementById("status-label"),
-  connectionLabel: document.getElementById("connection-label"),
   connectionWarning: document.getElementById("connection-warning"),
-  clock: document.getElementById("clock"),
   setupView: document.getElementById("setup-view"),
   deliveryView: document.getElementById("delivery-view"),
   setupMessage: document.getElementById("setup-message"),
@@ -24,6 +20,7 @@ const elements = {
   deliveryStops: document.getElementById("delivery-stops"),
   missionSummary: document.getElementById("mission-summary"),
   pickupButton: document.getElementById("pickup-button"),
+  resetButton: document.getElementById("reset-button"),
   pickupNext: document.getElementById("pickup-next"),
   errorPanel: document.getElementById("error-panel"),
   errorMessage: document.getElementById("error-message"),
@@ -37,15 +34,6 @@ let startPending = false;
 let pickupPendingFor = null;
 let lastError = "";
 let refreshInFlight = false;
-
-function updateClock() {
-  const now = new Date();
-  elements.clock.textContent = new Intl.DateTimeFormat("th-TH", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(now);
-}
 
 function showSetupMessage(message, kind = "") {
   elements.setupMessage.textContent = message;
@@ -111,19 +99,6 @@ function isSetupState() {
   return !controllerState || controllerState.state === "IDLE" || controllerState.state === "COMPLETED";
 }
 
-function stateLabel(state) {
-  const labels = {
-    IDLE: "พร้อมรับงาน",
-    COMPLETED: "กลับถึงครัวแล้ว",
-    PREPARING: "กำลังเตรียมภารกิจ",
-    NAVIGATING: "กำลังเดินทาง",
-    WAITING_PICKUP: "รอยืนยันรับอาหาร",
-    RETURNING: "กำลังกลับครัว",
-    ERROR: "ต้องตรวจสอบหุ่นยนต์",
-  };
-  return labels[state] || "สถานะไม่ทราบ";
-}
-
 function renderStops(snapshot) {
   const orders = Array.isArray(snapshot.orders) ? snapshot.orders : [];
   const index = snapshot.current_order_index;
@@ -157,9 +132,6 @@ function renderState(snapshot) {
   const state = snapshot.state || "IDLE";
   const setup = isSetupState();
 
-  elements.status.dataset.state = state;
-  elements.statusLabel.textContent = stateLabel(state);
-  elements.connectionLabel.textContent = connected ? "ระบบออนไลน์" : "ระบบออฟไลน์";
   elements.connectionWarning.hidden = connected;
   elements.setupView.hidden = !setup;
   elements.deliveryView.hidden = setup;
@@ -180,6 +152,8 @@ function renderState(snapshot) {
   elements.deliveryMessage.textContent = snapshot.message || "กำลังทำงาน";
   elements.errorPanel.hidden = state !== "ERROR";
   elements.errorMessage.textContent = snapshot.error || snapshot.message || "";
+  elements.resetButton.hidden = state !== "ERROR";
+  elements.resetButton.disabled = !connected;
 
   const index = snapshot.current_order_index;
   const currentOrder = Array.isArray(snapshot.orders) && Number.isInteger(index)
@@ -245,7 +219,6 @@ async function refreshState() {
       lastError = error.message;
       showSetupMessage("ติดต่อ controller ไม่ได้ กำลังลองเชื่อมต่อใหม่", "error");
     }
-    elements.connectionLabel.textContent = "ระบบออฟไลน์";
     elements.connectionWarning.hidden = false;
     elements.startButton.disabled = true;
     renderDraft();
@@ -313,6 +286,21 @@ async function confirmPickup() {
   }
 }
 
+async function resetMission() {
+  if (!connected || !controllerState || controllerState.state !== "ERROR") return;
+  elements.resetButton.disabled = true;
+  try {
+    await requestJson("/api/mission/reset", { method: "POST", body: JSON.stringify({}) });
+    for (const shelf of [1, 2]) {
+      draft[shelf] = { table_id: null, loaded_confirmed: false };
+    }
+    await refreshState();
+  } catch (error) {
+    elements.deliveryMessage.textContent = error.message;
+    elements.resetButton.disabled = false;
+  }
+}
+
 document.addEventListener("click", (event) => {
   const button = event.target.closest("button");
   if (!button) return;
@@ -325,12 +313,8 @@ document.addEventListener("click", (event) => {
     confirmPickup();
     return;
   }
-  if (button.id === "fullscreen-button") {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen?.().catch(() => {});
-    } else {
-      document.exitFullscreen?.().catch(() => {});
-    }
+  if (button.id === "reset-button") {
+    resetMission();
     return;
   }
   if (!isSetupState()) return;
@@ -359,7 +343,5 @@ document.addEventListener("click", (event) => {
   renderDraft();
 });
 
-updateClock();
-window.setInterval(updateClock, 10_000);
 refreshState();
 window.setInterval(refreshState, 500);
