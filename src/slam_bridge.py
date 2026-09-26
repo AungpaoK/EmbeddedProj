@@ -98,6 +98,11 @@ class SlamBridgeNode(Node):
         self._turn_intent_sub = self.create_subscription(
             String, "/turn_intent", self._turn_intent_callback, 10
         )
+        # Reassert the selected indicator so it resumes if the Arduino resets
+        # while the motors are drawing current. This never publishes motor commands.
+        self._indicator_heartbeat_timer = self.create_timer(
+            0.5, self._reassert_turn_signal
+        )
         self._scan_pub = self.create_publisher(LaserScan, "/scan_filtered", qos_profile_sensor_data)
         self._scan_sub = self.create_subscription(
             LaserScan,
@@ -273,8 +278,13 @@ class SlamBridgeNode(Node):
             return
         self._send_turn_signal(signal)
 
-    def _send_turn_signal(self, signal: str):
-        if not self._ser or signal == self._displayed_turn_signal:
+    def _reassert_turn_signal(self):
+        desired = self._displayed_turn_signal if self._delivery_mission_active else TURN_OFF
+        if desired != TURN_OFF or self._displayed_turn_signal != TURN_OFF:
+            self._send_turn_signal(desired, force=True)
+
+    def _send_turn_signal(self, signal: str, *, force: bool = False):
+        if not self._ser or (signal == self._displayed_turn_signal and not force):
             return
         try:
             self._ser.write(f"INDICATOR:{signal}\n".encode("utf-8"))
