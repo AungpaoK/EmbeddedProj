@@ -13,6 +13,8 @@ const elements = {
   sidebarBackdrop: document.getElementById("sidebar-backdrop"),
   sidebarClose: document.getElementById("sidebar-close"),
   deliveryView: document.getElementById("delivery-view"),
+  travelEyes: document.getElementById("travel-eyes"),
+  deliveryOrb: document.getElementById("delivery-orb"),
   obstacleScreen: document.getElementById("obstacle-screen"),
   setupMessage: document.getElementById("setup-message"),
   cancelMissionButton: document.getElementById("cancel-mission-button"),
@@ -180,6 +182,9 @@ function renderState(snapshot) {
   elements.setupView.hidden = !setup;
   elements.deliveryView.hidden = setup;
   elements.deliveryView.dataset.state = state;
+  const showingTravelEyes = ["PREPARING", "NAVIGATING", "PICKUP_DELAY", "RETURNING"].includes(state);
+  elements.travelEyes.hidden = !showingTravelEyes;
+  elements.deliveryOrb.hidden = showingTravelEyes;
   elements.obstacleScreen.hidden = snapshot.obstacle_detected !== true;
   elements.missionSummary.hidden = !setup;
   elements.cancelMissionButton.hidden = !cancellable;

@@ -91,7 +91,24 @@ button:focus-visible { outline: 3px solid #ffbd59; outline-offset: 4px; }
   background: linear-gradient(150deg, #eaf2ff, #d8e5f8);
   box-shadow: inset 0 -12px 22px #bdcde433;
 }
-.robot-eye { width: 9%; height: 25%; border-radius: 50%; background: #3269e8; box-shadow: 0 0 0 11px #c3d6ff; }
+.robot-eye {
+  position: relative; overflow: hidden;
+  width: 9%; height: 25%; border-radius: 50%;
+  background: #f7f9ff; box-shadow: 0 0 0 11px #c3d6ff;
+}
+.robot-eye::before, .robot-eye::after { content: ""; position: absolute; border-radius: 50%; }
+.robot-eye::before {
+  z-index: 2; inset: 0; background: #d8e5f8;
+  transform: scaleY(0); transform-origin: top;
+  animation: eye-blink 6s ease-in-out infinite;
+}
+.robot-eye::after {
+  z-index: 1; left: 50%; top: 53%; width: 38%; height: 42%;
+  background: #3269e8; transform: translate(-50%, -50%);
+  animation: idle-gaze 8s ease-in-out infinite;
+}
+.robot-eye:nth-child(2)::before { animation-delay: .08s; }
+.robot-eye:nth-child(2)::after { animation-delay: -.3s; }
 .robot-body {
   position: absolute; top: 31%; left: 0; right: 0; bottom: 10%;
   padding: 5% 5% 6%;
@@ -267,6 +284,41 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
   box-shadow: 0 0 0 12px #dce8ff, 0 0 0 24px #e9f0fd;
 }
 .delivery-orb svg { width: 62px; height: 62px; }
+.delivery-orb[hidden], .travel-eyes[hidden] { display: none; }
+.travel-eyes {
+  width: min(66vw, 460px); height: clamp(128px, 19vh, 184px); margin-bottom: 24px;
+  display: flex; align-items: center; justify-content: center; gap: clamp(30px, 6vw, 64px);
+  border: 4px solid #35445a; border-radius: 999px;
+  color: #fff; background: #101722; box-shadow: 0 0 0 12px #293951, 0 0 0 24px #1d293c;
+}
+.travel-eye {
+  position: relative; overflow: hidden;
+  width: clamp(58px, 8vw, 86px); height: clamp(72px, 11vh, 104px);
+  border: 5px solid #f5f7fc; border-radius: 50%;
+  background: #f5f7fc; box-shadow: 0 4px 12px #0006;
+}
+.travel-eye::before, .travel-eye::after { content: ""; position: absolute; border-radius: 50%; }
+.travel-eye::before {
+  z-index: 2; inset: -1px; background: #101722;
+  transform: scaleY(0); transform-origin: top;
+  animation: eye-blink 5.4s ease-in-out infinite;
+}
+.travel-eye::after {
+  z-index: 1; left: 50%; top: 52%; width: 34%; height: 38%;
+  background: #17243a; transform: translate(-50%, -50%);
+}
+.travel-eye:nth-child(2)::before { animation-delay: .1s; }
+.travel-eye:nth-child(2)::after { animation-delay: -.2s; }
+.delivery-view[data-state="NAVIGATING"] .travel-eyes,
+.delivery-view[data-state="RETURNING"] .travel-eyes {
+  animation: travel-bob 1.5s ease-in-out infinite;
+}
+.delivery-view[data-state="NAVIGATING"] .travel-eye::after {
+  animation: travel-gaze 2.2s ease-in-out infinite alternate;
+}
+.delivery-view[data-state="RETURNING"] .travel-eye::after {
+  animation: travel-gaze 2.2s ease-in-out infinite alternate-reverse;
+}
 .delivery-view[data-state="NAVIGATING"] .delivery-orb { animation: breathe 1.7s ease-in-out infinite; }
 .delivery-view[data-state="CANCELLING"] .delivery-orb { background: linear-gradient(145deg, #ee6870, #9e2532); box-shadow: 0 0 0 12px #ffe2e4, 0 0 0 24px #fff0f1; }
 .delivery-view[data-state="RETURNING"] .delivery-orb { background: linear-gradient(145deg, #7285a6, #475875); }
@@ -308,12 +360,14 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
 }
 .obstacle-screen[hidden] { display: none; }
 .obstacle-card { max-width: 620px; }
-.obstacle-icon {
-  width: 112px; height: 112px; margin: 0 auto 24px; display: grid; place-items: center;
-  color: #fff; background: #c43a47; border-radius: 50%;
-  box-shadow: 0 0 0 14px #c43a4733, 0 0 0 28px #c43a471a;
+.obstacle-face {
+  width: min(72vw, 290px); height: 132px; margin: 0 auto 28px;
+  display: flex; align-items: center; justify-content: center; gap: 14px;
+  border: 4px solid #ef9ba2; border-radius: 999px;
+  color: #fff; background: #101722; box-shadow: 0 0 0 14px #c43a4733, 0 0 0 28px #c43a471a;
+  font-size: clamp(68px, 10vw, 98px); font-weight: 800; line-height: .8;
 }
-.obstacle-icon svg { width: 68px; height: 68px; }
+.obstacle-face span { display: block; transform: scaleX(.82); }
 .obstacle-card h2 { margin: 0; font-size: clamp(38px, 5vw, 60px); }
 .obstacle-card p { margin: 14px 0 0; color: #e4e8ef; font-size: clamp(23px, 2.8vw, 32px); }
 
@@ -325,6 +379,23 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
 }
 .error-panel small { color: #b45d63; font-size: 17px; }
 
+@keyframes eye-blink {
+  0%, 92%, 100% { transform: scaleY(0); }
+  94%, 97% { transform: scaleY(1); }
+}
+@keyframes idle-gaze {
+  0%, 20%, 100% { transform: translate(-50%, -50%); }
+  35%, 50% { transform: translate(-22%, -50%); }
+  65%, 80% { transform: translate(-78%, -50%); }
+}
+@keyframes travel-gaze {
+  from { transform: translate(-78%, -50%); }
+  to { transform: translate(-22%, -50%); }
+}
+@keyframes travel-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
 @keyframes breathe {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.04); }
@@ -370,7 +441,9 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+  *, *::before, *::after { animation: none !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+  .robot-eye::before, .travel-eye::before { display: none; }
+  .robot-eye::after, .travel-eye::after { animation: none !important; }
 }
 
 
@@ -429,6 +502,7 @@ h1 { margin: 0; color: #17243a; font-size: clamp(34px, 3vw, 44px); letter-spacin
 }
 :root[data-theme="dark"] .robot-caption { box-shadow: 0 7px 20px #0005; }
 :root[data-theme="dark"] .robot-head { border-color: #53647c; background: linear-gradient(150deg, #33445d, #25344a); }
+:root[data-theme="dark"] .robot-eye::before { background: #33445d; }
 :root[data-theme="dark"] .robot-body { border-color: #53647c; background: #202d42; }
 :root[data-theme="dark"] .robot-shelf,
 :root[data-theme="dark"] .table-option,
