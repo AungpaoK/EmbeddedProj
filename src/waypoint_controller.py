@@ -303,16 +303,6 @@ class WaypointController:
             if self._clock() > deadline:
                 return self._fail("หมุนไม่ถึง heading เป้าหมายภายในเวลาที่กำหนด")
 
-            self._report_obstacle_state()
-            if self._safety.is_obstacle_detected:
-                paused_at = self._clock()
-                self._motion.stop_continuous()
-                self._sleep(self.control_period)
-                paused_for = self._clock() - paused_at
-                deadline += paused_for
-                last_progress_time += paused_for
-                continue
-
             _x, _y, heading = self._get_pose()
             error = normalize_angle(target_heading - heading)
             remaining = abs(error)
