@@ -1,36 +1,36 @@
 # Food Delivery Robot Documentation
 
-เอกสารการออกแบบระบบและสถาปัตยกรรมหุ่นยนต์ส่งอาหารอัตโนมัติ
+เอกสารการออกแบบระบบและสถาปัตยกรรมหุ่นยนต์ส่งอาหารอัตโนมัติรุ่นปัจจุบัน
 
-## สารบัญเอกสาร (Table of Contents)
+## สารบัญเอกสาร
 
 1. [คู่มือตั้งค่าระบบ (setup.md)](setup.md)
-   - เตรียมอุปกรณ์ พอร์ต และ firmware
-   - เปิด ROS 2, robot bridge, ผังร้าน, POS/Terminal console และตรวจสอบความพร้อม
-   - รูปแบบข้อความ `KEY:` จาก Keypad และเส้นทางรับข้อมูลของ Pi
+   - เตรียม Raspberry Pi, Arduino Uno, LiDAR, POS/Kiosk และ Keypad
+   - แฟลช firmware, ตั้งค่าพอร์ต และเริ่ม ROS 2 stack
+   - โปรโตคอล Keypad ผ่าน USB Serial และ <code>/keypad/key</code>
 
-2. [แบบร่างสถาปัตยกรรมเดิม (design.md)](design.md)
-   - เป็นแบบร่างช่วงแรกที่ยังอ้างถึง Arduino สองบอร์ดและ IR/LCD; การต่อใช้งานปัจจุบันให้ดู `setup.md`
-   - โครงสร้างทางกายภาพ 3 ชั้น และระบบขับเคลื่อน 6 ล้อ (Differential Drive / Tank Turn)
-   - การจัดสรรอุปกรณ์ตามชั้น (Control Base, Food Plates, LED Matrix, IR Sensors)
-   - สถาปัตยกรรมการสื่อสารระหว่างบอร์ด (Raspberry Pi & Dual Arduino Uno R3)
-   - ผังการเชื่อมต่อ Pinout (Motion Controller vs Shelf & UI Controller)
-   - การวิเคราะห์ระบบไฟฟ้าและแหล่งจ่ายพลังงาน (Power Distribution & Isolation)
+2. [Hardware & System Architecture Design (design.md)](design.md)
+   - โครงสร้างรถ 3 ชั้นและ Differential Drive 6 ล้อ
+   - BOM ล่าสุดและการจ่ายไฟจากแบตเตอรี่ 12 V
+   - Arduino Uno ตัวเดียว, PCF8574/I2C, Encoder, L298N และ LED Matrix
+   - การเชื่อมต่อ Raspberry Pi, RPLIDAR และ POS/Kiosk
 
 3. [บทที่ 2 แนวคิด ทฤษฎี และเอกสารที่เกี่ยวข้อง (chapter2.md)](chapter2.md)
-   - ระบบฝังตัว การควบคุมมอเตอร์ Encoder และ PID
-   - Differential Drive, Odometry, เซนเซอร์และความปลอดภัย
-   - Serial, FSM, ระบบจ่ายไฟ และงานวิจัยที่เกี่ยวข้อง
+   - ระบบฝังตัว, การควบคุมมอเตอร์, Encoder, PID และ Odometry
+   - Keypad ผ่าน I2C, Serial, LiDAR safety guard และ FSM
+   - ระบบจ่ายไฟและงานวิจัยที่เกี่ยวข้อง
 
 4. [Finite State Machine Architecture (FSM.md)](FSM.md)
-   - Main Delivery FSM (ระบบจัดการการส่งอาหาร)
-   - Motion & LED Matrix Sub-FSM (ระบบควบคุมการเคลื่อนที่และไฟเลี้ยว)
-   - การคำนวณตำแหน่งแบบ Odometry (Dead Reckoning)
-   - การควบคุมความเร็ว Ramping & Non-blocking LED Matrix
+   - Delivery FSM และการควบคุมงานจาก POS/Keypad
+   - คำสั่ง Motion Controller และการแสดงไฟเลี้ยว
+   - Odometry, PID, Wheel Sync และ fault handling
 
-5. [Operation Scenarios (scenario.md)](scenario.md)
-   - แผนผังร้านอาหารและพิกัดเส้นทาง (Layout & Coordinates)
-   - Scenario 1: การเสิร์ฟโต๊ะเดี่ยว (Single Table Delivery)
-   - Scenario 2: การเสิร์ฟ 2 โต๊ะในรอบเดียว (Multi-Table Delivery)
-   - Scenario 3: การใช้ปุ่ม Manual Override และจัดการข้อผิดพลาด
-   - ตารางสอดประสาน State, Odometry, มอเตอร์ และไฟเลี้ยว LED Matrix
+5. [หลักการควบคุมการเดินของหุ่นยนต์ (motion.md)](motion.md)
+   - เส้นทางคำสั่งจาก POS/FSM ไปยัง Raspberry Pi และ Arduino Uno
+   - คณิตศาสตร์ differential drive, encoder odometry และ heading correction
+   - วงควบคุมความเร็วล้อ, safety pause และค่าที่ใช้จูน
+
+6. [Operation Scenarios (scenario.md)](scenario.md)
+   - พิกัดร้านและเส้นทาง Kitchen → Junction → Table
+   - งานส่งโต๊ะเดี่ยวและหลายโต๊ะ
+   - การยืนยันรับอาหาร, การหยุดเมื่อพบสิ่งกีดขวาง และการกู้คืน Error

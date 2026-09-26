@@ -1,222 +1,144 @@
 # Hardware & System Architecture Design
 
-> เอกสารนี้เป็นแบบร่างสถาปัตยกรรมช่วงแรก จึงยังกล่าวถึง Arduino สองบอร์ด, IR Sensor และ LCD ซึ่งไม่ตรงกับการต่อใช้งานปัจจุบัน สำหรับ Arduino 1, Keypad ผ่าน PCF8574, โปรโตคอล USB Serial และ POS ให้ยึด [คู่มือตั้งค่าระบบ](setup.md)
+เอกสารนี้อธิบายฮาร์ดแวร์และสถาปัตยกรรมของหุ่นยนต์ส่งอาหารรุ่นปัจจุบัน โดยใช้ Arduino Uno R3 หนึ่งบอร์ดร่วมกับ Raspberry Pi 4 ระบบปัจจุบันไม่มี Arduino ตัวที่ 2, IR sensor, LCD 16x2 แยก หรือปุ่ม Manual Override แป้น Keypad เป็นช่องทางควบคุมทางเลือกของ POS/Kiosk บนจอสัมผัส
 
-เอกสารนี้รวบรวมรายละเอียดการออกแบบฮาร์ดแวร์ โครงสร้างทางกายภาพ สถาปัตยกรรมตัวควบคุม และการจัดสรรอุปกรณ์ในแต่ละชั้นของหุ่นยนต์ส่งอาหารอัตโนมัติ
+## 1. โครงสร้างทางกายภาพ
 
----
+หุ่นยนต์มีโครงสร้าง 3 ชั้น: ฐานควบคุมอยู่ชั้นล่าง ถาดอาหารชั้น 1 อยู่ระดับกลาง และถาดอาหารชั้น 2 อยู่ชั้นบน ใช้ระบบขับเคลื่อน Differential Drive ด้วยมอเตอร์มี Encoder สองตัวและล้อขับขนาด 130 mm สองล้อ มี caster สี่ล้อรองรับตัวรถ
 
-## 1. โครงสร้างทางกายภาพและระบบขับเคลื่อน (Mechanical & Chassis)
-
-หุ่นยนต์ใช้โครงสร้างแบบ 3 ชั้น (3-Tier Structure) ขับเคลื่อนด้วยระบบ **Differential Drive (Tank Turn)** เพื่อให้สามารถหมุนกลับตัวในพื้นที่แคบได้โดยไม่ต้องมีเพลาเลี้ยว
-
-```
-         +-------------------------------+
-         |    3rd Floor: Food Plate 2    | <--- IR Sensor 2 + LED Matrix (Rear)
-         +---------------+---------------+
-                         |
-         +---------------+---------------+
-         |    2nd Floor: Food Plate 1    | <--- IR Sensor 1
-         +---------------+---------------+
-                         |
-         +---------------+---------------+
-         |    1st Floor: Control Base    | <--- 12V Battery, Powerbank, XL4016, L298N, 2x Arduino Uno, Raspi
-         +---+-----------+-----------+---+
-             |           |           |
-          (Caster)  [Drive Wheel] (Caster)
-                     (with Encoder)
+```text
+         +-----------------------------------------+
+         |  ชั้นบน: ถาดอาหารชั้น 2                    |
+         |  LED Matrix 32x8 ติดด้านท้าย               |
+         +-----------------------------------------+
+         |  ชั้นกลาง: ถาดอาหารชั้น 1                   |
+         +-----------------------------------------+
+         |  ฐาน: แบตเตอรี่, วงจรไฟ, Pi 4, Arduino     |
+         |  L298N และตัวแปลง DC-DC                  |
+         +-----------------------------------------+
+           caster      ล้อขับ 2 ล้อ      caster
+             (ด้านหน้า/หลังของตัวรถมี caster รวม 4 ล้อ)
 ```
 
-### การจัดวางล้อ (6-Wheel Configuration)
-- **ล้อขับเคลื่อนหลัก (Main Drive Wheels)**: 2 ล้อ ขนาดใหญ่ ติดตั้งตรงกลางตัวหุ่น ขับด้วยมอเตอร์ DC พร้อม **Motor Encoder**
-- **ล้อประคอง/ล้อฟรี (Caster Wheels)**: 4 ล้อ ขนาดเล็ก (ด้านหน้า 2 ล้อ, ด้านหลัง 2 ล้อ) ช่วยรองรับน้ำหนัก ป้องกันการคว่ำ และรักษาเสถียรภาพขณะบรรทุกอาหาร
+ค่าที่ firmware/configuration ใช้คำนวณการเคลื่อนที่คือรัศมีล้อ 0.065 m, ระยะห่างล้อ 0.343 m และ 1920 encoder ticks ต่อรอบ ดูค่าปัจจุบันได้ที่ [robotconfig.h](../src/Arduino_1_Motion/robotconfig.h) และ [config.py](../src/config.py)
 
-### ค่าพารามิเตอร์ของระบบขับเคลื่อน (Robot Parameters)
-อ้างอิงจาก [robotconfig.h](file:///home/jk/EmbeddedProj/robotconfig/robotconfig.h):
-- **รัศมีล้อ (Wheel Radius)**: $R = 0.065\text{ m}$ ($6.5\text{ cm}$)
-- **ระยะห่างระหว่างล้อซ้าย-ขวา (Wheel Base)**: $W = 0.343\text{ m}$ ($34.3\text{ cm}$)
-- **ความละเอียด Encoder (Ticks per Revolution)**: $1920\text{ ticks/rev}$
-- **ระยะทางต่อพัลส์ (Meters per Pulse)**: $\approx 0.0002127\text{ m/tick}$
-
----
-
-## 2. การจัดสรรอุปกรณ์ตามชั้น (Layer Architecture)
+## 2. สถาปัตยกรรมระบบ
 
 ```mermaid
-graph TD
-    subgraph Floor3["ชั้นที่ 3 (3rd Floor - Food Plate 2)"]
-        FP2[ถาดวางอาหารชั้น 2]
-        IR2[IR Sensor ชั้น 2]
-        LEDM[LED Matrix ไฟเลี้ยว/ไฟท้าย ด้านหลัง]
-    end
+flowchart LR
+    TOUCH["จอสัมผัส 7 นิ้ว<br/>POS / Kiosk"]
+    POS["POS Server และ PosBridge<br/>รายการงานร่วม"]
+    FSM["Delivery FSM และ Waypoint Controller"]
+    ROS["ROS 2 / slam_bridge"]
+    PI["Raspberry Pi 4"]
+    LIDAR["RPLIDAR A1"]
+    UNO["Arduino Uno R3<br/>Motion + Encoder + Keypad"]
+    PCF["PCF8574"]
+    KEYPAD["Keypad 4x4"]
+    L298["L298N"]
+    MOTORS["มอเตอร์ Encoder 2 ตัว"]
+    LED["LED Matrix 32x8"]
 
-    subgraph Floor2["ชั้นที่ 2 (2nd Floor - Food Plate 1)"]
-        FP1[ถาดวางอาหารชั้น 1]
-        IR1[IR Sensor ชั้น 1]
-    end
-
-    subgraph Floor1["ชั้นที่ 1 (1st Floor - Control & Power Base)"]
-        BAT[12V Battery Pack]
-        PB[Powerbank 5V]
-        XL[XL4016 Step-Down Module]
-        L298[L298N Motor Driver]
-        RPI[Raspberry Pi - SLAM/LiDAR Processor]
-        UNO1[Arduino Uno R3 #1 - Motion & Drive Controller]
-        UNO2[Arduino Uno R3 #2 - Shelf & UI Controller]
-        MOT_L[Left Motor + Encoder]
-        MOT_R[Right Motor + Encoder]
-    end
-
-    subgraph Peripherals["อุปกรณ์ต่อพ่วงในอนาคต (Expansion)"]
-        LCD[LCD Display 16x2 / 20x4 I2C]
-        KEYPAD[Keypad 4x4]
-        LIDAR[2D LiDAR Sensor]
-    end
-
-    PB --> RPI
-    BAT --> L298
-    BAT --> XL
-    XL --> UNO1
-    XL --> UNO2
-    L298 --> MOT_L
-    L298 --> MOT_R
-    UNO1 --> L298
-    MOT_L -.-> UNO1
-    MOT_R -.-> UNO1
-    UNO1 --> LEDM
-
-    UNO2 --> IR1
-    UNO2 --> IR2
-    UNO2 --> LCD
-    UNO2 --> KEYPAD
-
-    RPI -.-> LIDAR
-    RPI <==> UNO1
-    RPI <==> UNO2
+    TOUCH <-->|"HTTP บน Pi"| POS
+    POS --> FSM
+    FSM <-->|"ROS 2 topics"| ROS
+    ROS <-->|"USB Serial 115200"| UNO
+    UNO -->|"KEY:<char>"| ROS
+    ROS -->|"/keypad/key"| POS
+    LIDAR -->|"/scan"| PI
+    PI --> POS
+    KEYPAD --> PCF
+    PCF -->|"I2C: A4/A5"| UNO
+    UNO -->|"PWM และทิศทาง"| L298
+    L298 --> MOTORS
+    MOTORS -->|"Encoder feedback"| UNO
+    UNO --> LED
 ```
 
-### ชั้นที่ 1: ฐานควบคุมและพลังงาน (Control & Power Base)
-- **12V Battery Pack**: แหล่งจ่ายไฟหลักสำหรับระบบขับเคลื่อนมอเตอร์ (L298N) และจ่ายเข้าโมดูล XL4016
-- **Powerbank (5V)**: แหล่งจ่ายไฟอิสระสำหรับ Raspberry Pi (และจ่ายต่อให้ 2D LiDAR) โดยเฉพาะ แยกระบบประมวลผลสูงออกจากโหลดมอเตอร์เพื่อป้องกันไฟตก (Brownout) และสัญญาณรบกวน
-- **XL4016 DC-DC Step-Down Buck Converter**: โมดูลลดแรงดันประสิทธิภาพสูงจากแบตเตอรี่ 12V แปลงลงมาจ่ายไฟเลี้ยงให้กับ Arduino Uno R3 #1, Arduino Uno R3 #2 และอุปกรณ์ต่อพ่วง (รุ่นพิกัดกระแสสูงสุด 10A / ใช้งานต่อเนื่องได้สบายๆ 6A-8A)
-- **L298N Dual H-Bridge Motor Driver**: รับสัญญาณ PWM และ Direction จาก Arduino #1 เพื่อขับมอเตอร์กระแสสูง
-- **Arduino Uno R3 #1 (Motion Controller)**:
-  - ประมวลผล Interrupt จาก Optical/Magnetic Encoder สองล้อ
-  - ทำ Dual PID Speed Control ที่ความถี่ 50 Hz พร้อม Wheel Synchronization
-  - วาดแอนิเมชันไฟเลี้ยวบน LED Matrix ตามคำสั่ง `INDICATOR:LEFT`, `INDICATOR:RIGHT` หรือ `INDICATOR:OFF` จาก Pi
-- **Arduino Uno R3 #2 (Shelf & User Interface Controller)**:
-  - ตรวจจับเซนเซอร์ IR ประจำชั้นที่ 2 และ 3
-  - เชื่อมต่อหน้าจอ LCD และ Keypad 4x4 สำหรับรับคำสั่งเลือกชั้น/โต๊ะ
-- **Raspberry Pi**:
-  - ประมวลผล LiDAR / SLAM เพื่อคำนวณแผนที่และระบุตำแหน่งระดับสูง (High-level Navigation)
-  - เชื่อมต่อกับ Arduino ผ่านพอร์ต USB Serial
-  - เปิด gate ไฟเลี้ยวตลอดภารกิจส่งอาหาร รวมขาไปและขากลับ แล้วส่งเจตนาเลี้ยวผ่าน `/turn_intent` แยกจาก `/cmd_vel`
-  - ปิดไฟเลี้ยวระหว่างปรับ heading ขณะวิ่ง และนอกภารกิจส่งอาหาร
+Raspberry Pi 4 เป็นคอมพิวเตอร์หลักสำหรับ POS/Kiosk, การจัดการภารกิจ, waypoint และ LiDAR safety guard ส่วน Arduino Uno อ่าน Encoder และ Keypad, ควบคุมมอเตอร์ผ่าน L298N และควบคุม LED Matrix
 
-### ชั้นที่ 2: ถาดเสิร์ฟอาหารชั้น 1 (Food Plate 1)
-- ถาดวางอาหารสำหรับเสิร์ฟโต๊ะเป้าหมายแรก
-- **IR Sensor ชั้น 2**: ตรวจสอบการวางจานอาหาร และตรวจจับเมื่อลูกค้าหยิบจานออกไป
+ในโหมด ROS ที่ใช้โดยชุดเริ่มระบบปัจจุบัน <code>slam_bridge.py</code> ถือพอร์ต USB Serial ของ Arduino อ่านบรรทัด <code>ENCODER:</code>, <code>STATUS:</code> และ <code>KEY:</code> แล้วส่งสถานะที่เกี่ยวข้องเข้า ROS 2 โดย Keypad ส่งต่อผ่าน topic <code>/keypad/key</code> ไปยัง POS บน Pi หากใช้ backend แบบ Serial โดยตรง <code>odometry.py</code> จะอ่านบรรทัด Keypad จากพอร์ตเดียวกันและส่งให้ POS โดยตรง
 
-### ชั้นที่ 3: ถาดเสิร์ฟอาหารชั้น 2 และไฟสัญญาณท้าย (Food Plate 2 & Indicators)
-- ถาดวางอาหารสำหรับเสิร์ฟโต๊ะเป้าหมายที่สอง
-- **IR Sensor ชั้น 3**: ตรวจสอบการวางและการหยิบอาหารของชั้นบน
-- **LED Matrix (ติดด้านหลังหุ่นยนต์)**: แสดงไฟเลี้ยวซ้าย/ขวา ไฟฉุกเฉิน ไฟเบรกสีแดง และไฟสถานะการทำงานแบบ Real-time
+หน้าจอสัมผัสและ Keypad ควบคุม POS draft ชุดเดียวกัน หน้าจอ POS บน Kiosk เป็นช่องทางหลัก; Keypad ใช้แทนการกดหน้าจอสำหรับการตั้งงานและยืนยันรับอาหาร โดย POS ยังคงแสดงสถานะและคำแนะนำ
 
----
+| สถานะ POS  | ปุ่ม                             | การทำงาน                                      |
+| ---------- | -------------------------------- | --------------------------------------------- |
+| รอรับงาน   | <code>A</code> / <code>B</code>  | เลือกชั้น 2 / ชั้น 1 และเปิดแผง Keypad บน POS |
+| รอรับงาน   | <code>1</code> / <code>2</code>  | เลือกโต๊ะ 1 / โต๊ะ 2 ให้ชั้นที่เลือก          |
+| รอรับงาน   | <code>C</code>                   | เปลี่ยนสถานะยืนยันอาหารบนชั้นที่เลือก         |
+| รอรับงาน   | <code>D</code> / <code>\*</code> | ล้างรายการของชั้นที่เลือก / ล้างรายการทั้งหมด |
+| รอรับงาน   | <code>#</code>                   | เริ่มภารกิจเมื่อรายการพร้อม                   |
+| รอรับอาหาร | <code>#</code>                   | ยืนยันรับอาหารที่โต๊ะปัจจุบัน                 |
+| ข้อผิดพลาด | <code>\*</code>                  | ขอรีเซ็ตภารกิจ                                |
 
-## 3. สถาปัตยกรรมการสื่อสารระหว่างบอร์ด (Inter-Controller Architecture)
+เมื่อกำหนดโต๊ะใหม่ POS Server ปัจจุบันตั้งสถานะอาหารของชั้นนั้นเป็นยืนยันแล้ว; ปุ่ม `C` ใช้สลับสถานะนี้ จึงควรตรวจสถานะบน Kiosk ก่อนเริ่มงาน
 
-เพื่อรองรับการขยายระบบและการตัดสินใจในอนาคต มี 3 รูปแบบสถาปัตยกรรมที่ประเมินไว้:
+ในสถานะอื่น Keypad จะไม่เปลี่ยนภารกิจ การวางอาหารบนชั้นเป็นการตรวจยืนยันโดยผู้ใช้ผ่าน POS หรือ Keypad ไม่มี sensor ตรวจการวางหรือหยิบอาหาร
 
-```
-[ทางเลือก A: Master-Slave via Dual USB Serial]
- Raspberry Pi (Master)
-      ├── /dev/ttyUSB0 ────> Arduino Uno #1 (Motion & Drive)
-      └── /dev/ttyUSB1 ────> Arduino Uno #2 (Shelf & UI)
+## 3. การต่อวงจรและอินเทอร์เฟซ
 
-[ทางเลือก B: Internal I2C/UART Bridge]
- Raspberry Pi ──(USB)──> Arduino Uno #1 (Master Bridge)
-                              │ (I2C / SoftwareSerial)
-                              ▼
-                         Arduino Uno #2 (Shelf Controller)
+### Arduino Uno R3
 
-[ทางเลือก C: ROS / ROS 2 Ecosystem]
- ROS2 Navigation Node (Raspi) <──(micro-ROS / rosserial)──> Arduino Nodes
-```
+| พิน                | สัญญาณ         | หน้าที่                            |
+| ------------------ | -------------- | ---------------------------------- |
+| D4                 | LED Matrix DIN | รับข้อมูล MAX7219                  |
+| D5                 | LED Matrix CS  | เลือก MAX7219                      |
+| D6                 | LED Matrix CLK | สัญญาณนาฬิกา MAX7219               |
+| D7                 | L298N IN4      | กำหนดทิศทางมอเตอร์ขวา              |
+| D8–D9              | L298N IN1–IN2  | กำหนดทิศทางมอเตอร์ซ้าย             |
+| D10                | L298N ENA      | PWM มอเตอร์ซ้าย                    |
+| D11                | L298N ENB      | PWM มอเตอร์ขวา                     |
+| D12                | L298N IN3      | กำหนดทิศทางมอเตอร์ขวา              |
+| A0–A3              | Encoder        | Encoder สองเฟสของมอเตอร์ซ้ายและขวา |
+| A4 (SDA), A5 (SCL) | I2C            | PCF8574 สำหรับ Keypad              |
 
-### ตารางเปรียบเทียบแนวทางการสื่อสาร (Architecture Trade-offs)
+PCF8574 ใช้ address เริ่มต้น <code>0x20</code>; ใน configuration ของ Keypad กำหนดแถว Row ต่อ P7–P4 และ Column ต่อ P3–P0 ดูรายละเอียดที่ [Arduino1Keypad.h](../src/Arduino_1_Motion/Arduino1Keypad.h)
 
-| เกณฑ์การประเมิน | ทางเลือก A (Dual USB Serial) | ทางเลือก B (I2C/UART Bridge) | ทางเลือก C (ROS / micro-ROS) |
-| :--- | :--- | :--- | :--- |
-| **ความซับซ้อนของโค้ด** | ต่ำ (แยกส่วนชัดเจน ไม่ขึ้นต่อกัน) | ปานกลาง (ต้องเขียน Protocol 2 ต่อ) | สูง (ต้องคอนฟิกสภาพแวดล้อม ROS) |
-| **การ Debug / ทดสอบ** | ง่ายมาก (ทดสอบผ่าน Serial Monitor ทีละบอร์ดได้) | ปานกลาง (ต้องดักสัญญาณบนบัส I2C) | ปานกลาง (ดูผ่าน ROS Topic) |
-| **การรองรับ SLAM/Navigation** | ต้องเขียน State Machine บน Pi เอง | ต้องเขียน State Machine บน Pi เอง | พร้อมเชื่อมต่อ Nav2 / SLAM Toolbox ทันที |
-| **สถานะการเลือก** | **แนะนำสำหรับการเริ่มต้นพัฒนา** | ทางเลือกสำรอง | แผนต่อยอดในระยะยาว |
+Arduino ส่งข้อมูลผ่าน USB Serial ที่ 115200 baud โดยใช้ข้อความขึ้นบรรทัดใหม่ เช่น <code>KEY:A</code>, <code>ENCODER:ซ้าย,ขวา</code> และ <code>STATUS:DONE</code> Raspberry Pi ต่อกับ Arduino ผ่านสาย USB B to USB A; RPLIDAR ต่อเข้ากับ Pi ทาง USB ส่วนจอสัมผัสต่อภาพผ่าน Micro HDMI และข้อมูล touch ผ่าน USB
 
----
+### จอและไฟแสดงผล
 
-## 4. ข้อกำหนดพินและการเชื่อมต่อ (Hardware Pin Mapping)
+จอสัมผัส Aprotii ขนาด 7 นิ้วแสดง POS/Kiosk บน Raspberry Pi จึงทำหน้าที่แสดงรายการงาน สถานะภารกิจ และการยืนยันรับอาหารแทน LCD ตัวอักษรแยกต่างหาก
 
-### Arduino Uno R3 #1 (Motion Controller)
-อ้างอิงจาก [PID.ino](file:///home/jk/EmbeddedProj/PID/PID.ino) และ [robotconfig.h](file:///home/jk/EmbeddedProj/robotconfig/robotconfig.h):
+LED Matrix ขนาด 32x8 ใช้ MAX7219 จำนวน 4 โมดูลและต่อกับ Arduino เพื่อแสดงลูกศรไฟเลี้ยวตามคำสั่งจาก Raspberry Pi
 
-| พิน (Pin) | สัญญาณ (Signal) | ฟังก์ชันการทำงาน |
-| :--- | :--- | :--- |
-| **D7** | `IN4` | Direction Pin มอเตอร์ขวา |
-| **D8** | `IN1` | Direction Pin มอเตอร์ซ้าย |
-| **D9** | `IN2` | Direction Pin มอเตอร์ซ้าย |
-| **D10** | `ENA` | PWM Speed มอเตอร์ซ้าย |
-| **D11** | `ENB` | PWM Speed มอเตอร์ขวา |
-| **D12** | `IN3` | Direction Pin มอเตอร์ขวา |
-| **A0 (PC0)** | `RIGHT_ENC_B` | Right Motor Encoder Phase B (Interrupt PCINT1) |
-| **A1 (PC1)** | `RIGHT_ENC_A` | Right Motor Encoder Phase A (Interrupt PCINT1) |
-| **A4 (PC4)** | `LEFT_ENC_B` | Left Motor Encoder Phase B (Interrupt PCINT1) |
-| **A5 (PC5)** | `LEFT_ENC_A` | Left Motor Encoder Phase A (Interrupt PCINT1) |
-| **D4** | `LED_MATRIX_DIN` | Data In ของ LED Matrix (software SPI) |
-| **D5** | `LED_MATRIX_CS` | Chip Select ของ LED Matrix |
-| **D6** | `LED_MATRIX_CLK` | Clock ของ LED Matrix (software SPI) |
+## 4. ระบบจ่ายไฟ
 
-### Arduino Uno R3 #2 (Shelf & UI Controller)
+แหล่งจ่ายหลักเป็นแบตเตอรี่ลิเธียม 12 V 15 Ah พร้อมสวิตช์ 12 V และ bus bar สำหรับกระจายไฟ วงจร L298N รับไฟฝั่งมอเตอร์จากระบบ 12 V ส่วน buck converter 10 A และตัวแปลง DC-DC แบบอะแดปเตอร์ที่ติดตั้งอยู่ลดแรงดันให้เหมาะกับอุปกรณ์อิเล็กทรอนิกส์ เช่น Pi, Arduino และจอสัมผัส รายละเอียดการแยกสาขาแรงดันให้ยึดตามการต่อวงจรจริง ไม่อนุมานจากพิกัดชื่อโมดูลเพียงอย่างเดียว
 
-| พิน (Pin) | สัญญาณ (Signal) | ฟังก์ชันการทำงาน |
-| :--- | :--- | :--- |
-| **D2** | `IR_SHELF_1` | Digital Input เซนเซอร์ IR ตรวจอาหารชั้น 2 |
-| **D3** | `IR_SHELF_2` | Digital Input เซนเซอร์ IR ตรวจอาหารชั้น 3 |
-| **D4–D11** | `KEYPAD_R1-R4, C1-C4` | แป้นพิมพ์ Keypad 4x4 เมทริกซ์ |
-| **A4 (SDA), A5 (SCL)** | `I2C Bus` | เชื่อมต่อจอแสดงผล LCD (I2C Adapter Module) |
-| **D12** | `MANUAL_OVERRIDE_BTN` | ปุ่มกด Manual Override บังคับข้ามสถานะ |
+มอดูล Rideon อ่าน/แสดงสถานะแบตเตอรี่ที่ระบุช่วง 8–72 V ต่อกับระบบแบตเตอรี่ 12 V ส่วน bus bar 14 ช่องสองชุดและ 5 ช่องหนึ่งชุดใช้กระจายสายไฟในฐานรถ
 
----
+## 5. รายการอุปกรณ์ (BOM)
 
-## 5. การวิเคราะห์ระบบไฟฟ้าและแหล่งจ่ายพลังงาน (Power Distribution & Isolation)
+| ลำดับ | รายการ                                                   |   จำนวน |
+| ----- | -------------------------------------------------------- | ------: |
+| 1     | Step Down DC-DC 10A Buck Step-down                       |       1 |
+| 2     | แกนต่อมอเตอร์หกเหลี่ยม Extended motor shaft 30 mm [6 mm] |       4 |
+| 3     | UNO R3 แบบถอดชิปได้ พร้อมสาย USB                         |       1 |
+| 4     | ABS Case พร้อมพัดลม สำหรับ Raspberry Pi 4 (OEM)          |       1 |
+| 5     | Kingston microSD Card 64GB Canvas Select Plus            |       1 |
+| 6     | ZENOVA แบตเตอรี่ลิเธียม 12V 15Ah พร้อมเครื่องชาร์จ       |       1 |
+| 7     | RPLIDAR A1M8-R6, 360 Degree Laser Scanner                |       1 |
+| 8     | Raspberry Pi 4 Model B, 4GB                              |       1 |
+| 9     | สวิตช์ DC 12V                                            |       1 |
+| 10    | L298N Motor Driver Module                                |       1 |
+| 11    | PCF8574                                                  |       1 |
+| 12    | Keypad Matrix 4x4                                        |       1 |
+| 13    | LED Matrix 32x8                                          |       1 |
+| 14    | Arduino UNO Terminal Shield                              |       1 |
+| 15    | Bus Bar 14 ช่อง                                          |       2 |
+| 16    | Bus Bar 5 ช่อง                                           |       1 |
+| 17    | มอเตอร์ DC Encoder JGB37-520                             |       2 |
+| 18    | ล้อยางขนาด 130 mm                                        |       2 |
+| 19    | มอดูลอ่านความจุแบตเตอรี่ Rideon DC 8V–72V                |       1 |
+| 20    | จอสัมผัส Aprotii ขนาด 7 นิ้ว (HDMI)                      |       1 |
+| 21    | สาย Micro HDMI to HDMI ยาว 1.5 m                         |       1 |
+| 22    | สาย Micro USB to USB A ยาว 2 m                           |       1 |
+| 23    | สาย USB B to USB A ยาว 2 m                               |       1 |
+| 24    | อะลูมิเนียมโปรไฟล์ 20x20 ยาว 1 m                         |       1 |
+| 25    | ข้อต่ออะลูมิเนียมโปรไฟล์                                 |       8 |
+| 26    | แผ่นอะคริลิกหนา 5 mm ขนาด 60x60 cm                       |       1 |
+| 27    | สายไฟจัมเปอร์                                            | ไม่ระบุ |
+| 28    | น็อตและสกรู                                              | ไม่ระบุ |
 
-การออกแบบระบบจ่ายไฟของหุ่นยนต์ใช้แนวทาง **การแยกโดเมนพลังงาน (Power Domain Isolation)** เพื่อตัดสัญญาณรบกวนทางแม่เหล็กไฟฟ้า (EMI) และป้องกันปัญหาบอร์ดคอมพิวเตอร์รีเซ็ตจากสภาวะไฟตก (Brownout) ขณะมอเตอร์เร่งออกตัวหรือเลี้ยวแบบ Tank Turn:
-
-```
-[Domain 1: High-Level Compute & LiDAR]
-Powerbank (5V) ───────> Raspberry Pi 4/5 (USB-C) ─────────> 2D LiDAR Sensor (USB)
-
-[Domain 2: Main Motor Drive]
-12V Battery Pack ────┬──> L298N Motor Driver (ขั้ว Vs) ───> DC Motors (ซ้าย/ขวา)
-                     │
-[Domain 3: Low-Level Logic & Peripherals]
-                     └──> XL4016 Step-Down Module ────────┬──> Arduino Uno R3 #1 (Motion)
-                          (ปรับลด 12V -> 5V-9V, สูงสุด 10A) ├──> Arduino Uno R3 #2 (Shelf/UI)
-                                                           ├──> LED Matrix (Rear)
-                                                           └──> Sensors & Peripherals
-
-[Common Reference]
-Raspberry Pi <====(สาย USB Serial / Common GND)====> Arduino Uno #1 & #2
-```
-
-### ข้อดีและแนวทางการต่อใช้งาน (Implementation Highlights)
-
-1. **Powerbank สำหรับ Raspberry Pi (Clean & Isolated Power)**:
-   - จ่ายไฟ 5V นิ่งสนิทและแยกโดเมนอิสระจากมอเตอร์โดยสิ้นเชิง
-   - ป้องกันปัญหาไฟตก (Voltage Sag/Brownout) และ Back-EMF จากมอเตอร์ 100% ทำให้ OS (Linux/ROS) และเซนเซอร์ LiDAR ทำงานได้อย่างมีเสถียรภาพสูงสุด
-2. **XL4016 DC-DC Step-Down Buck Converter สำหรับ Arduino & Sensors**:
-   - รองรับกระแสสูงสุดถึง **10A** (ใช้งานต่อเนื่องได้ 6A-8A สบายๆ มีฮีตซิงก์ระบายความร้อนขนาดใหญ่)
-   - ประสิทธิภาพการแปลงพลังงานสูง (~94%) ดีกว่าการใช้เรกูเลเตอร์ 7805 บน L298N ซึ่งจ่ายได้เพียง 500mA และร้อนจัด
-   - มีกำลังไฟสำรองเพียงพอสำหรับจ่ายเลี้ยงทั้ง Arduino Uno 2 บอร์ด, โมดูล LED Matrix และเซนเซอร์อื่นๆ พร้อมกัน
-3. **การต่อกราวด์ร่วม (Common Ground)**:
-   - แม้ Raspberry Pi จะใช้ไฟจาก Powerbank แยกต่างหาก แต่สาย **USB Serial** ที่ต่อระหว่าง Pi กับ Arduino Uno ทั้ง 2 บอร์ด จะเชื่อมขั้วกราวด์ (GND) เข้าด้วยกันโดยอัตโนมัติ ทำให้ระดับแรงดันสัญญาณ Logic (0V/5V) อ้างอิงจุดเดียวกันอย่างปลอดภัยและสื่อสารได้แม่นยำ
+> รายการ caster wheels ไม่ปรากฏเป็นรายการแยกใน BOM ที่ได้รับ แต่ผังตัวรถปัจจุบันใช้ caster 4 ล้อตามข้อมูลยืนยันของโครงสร้างรถ
