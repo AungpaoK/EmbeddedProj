@@ -25,12 +25,16 @@
    - คำสั่ง Motion Controller และการแสดงไฟเลี้ยว
    - Odometry, PID, Wheel Sync และ fault handling
 
-5. [หลักการควบคุมการเดินของหุ่นยนต์ (motion.md)](motion.md)
+5. [โปรโตคอลสื่อสารระหว่าง Raspberry Pi กับ Arduino (protocol.md)](protocol.md)
+   - USB Serial และรูปแบบ payload ของคำสั่งกับข้อมูลตอบกลับ
+   - โหมด ROS/Serial, Encoder telemetry และ Keypad
+
+6. [หลักการควบคุมการเดินของหุ่นยนต์ (motion.md)](motion.md)
    - เส้นทางคำสั่งจาก POS/FSM ไปยัง Raspberry Pi และ Arduino Uno
    - คณิตศาสตร์ differential drive, encoder odometry และ heading correction
    - วงควบคุมความเร็วล้อ, safety pause และค่าที่ใช้จูน
 
-6. [Operation Scenarios (scenario.md)](scenario.md)
+7. [Operation Scenarios (scenario.md)](scenario.md)
    - พิกัดร้านและเส้นทาง Kitchen → Junction → Table
    - งานส่งโต๊ะเดี่ยวและหลายโต๊ะ
    - การยืนยันรับอาหาร, การหยุดเมื่อพบสิ่งกีดขวาง และการกู้คืน Error
