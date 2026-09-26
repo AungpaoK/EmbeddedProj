@@ -17,13 +17,18 @@
    - ผังการเชื่อมต่อ Pinout (Motion Controller vs Shelf & UI Controller)
    - การวิเคราะห์ระบบไฟฟ้าและแหล่งจ่ายพลังงาน (Power Distribution & Isolation)
 
-3. [Finite State Machine Architecture (FSM.md)](FSM.md)
+3. [บทที่ 2 แนวคิด ทฤษฎี และเอกสารที่เกี่ยวข้อง (chapter2.md)](chapter2.md)
+   - ระบบฝังตัว การควบคุมมอเตอร์ Encoder และ PID
+   - Differential Drive, Odometry, เซนเซอร์และความปลอดภัย
+   - Serial, FSM, ระบบจ่ายไฟ และงานวิจัยที่เกี่ยวข้อง
+
+4. [Finite State Machine Architecture (FSM.md)](FSM.md)
    - Main Delivery FSM (ระบบจัดการการส่งอาหาร)
    - Motion & LED Matrix Sub-FSM (ระบบควบคุมการเคลื่อนที่และไฟเลี้ยว)
    - การคำนวณตำแหน่งแบบ Odometry (Dead Reckoning)
    - การควบคุมความเร็ว Ramping & Non-blocking LED Matrix
 
-4. [Operation Scenarios (scenario.md)](scenario.md)
+5. [Operation Scenarios (scenario.md)](scenario.md)
    - แผนผังร้านอาหารและพิกัดเส้นทาง (Layout & Coordinates)
    - Scenario 1: การเสิร์ฟโต๊ะเดี่ยว (Single Table Delivery)
    - Scenario 2: การเสิร์ฟ 2 โต๊ะในรอบเดียว (Multi-Table Delivery)
