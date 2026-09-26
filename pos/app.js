@@ -182,7 +182,8 @@ function renderState(snapshot) {
   elements.setupView.hidden = !setup;
   elements.deliveryView.hidden = setup;
   elements.deliveryView.dataset.state = state;
-  const showingTravelEyes = ["PREPARING", "NAVIGATING", "PICKUP_DELAY", "RETURNING"].includes(state);
+  const showingTravelEyes = ["PREPARING", "NAVIGATING", "PICKUP_DELAY", "RETURNING", "CANCELLING"].includes(state);
+  elements.deliveryView.dataset.faceOnly = String(showingTravelEyes);
   elements.travelEyes.hidden = !showingTravelEyes;
   elements.deliveryOrb.hidden = showingTravelEyes;
   elements.obstacleScreen.hidden = snapshot.obstacle_detected !== true;
