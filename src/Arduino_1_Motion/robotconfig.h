@@ -21,8 +21,13 @@
 constexpr uint8_t MAX7219_COUNT = 4;
 constexpr uint8_t MAX7219_BRIGHTNESS = 2;
 
-// These values control only the MAX7219 rendering animation. The Raspberry
-// Pi decides whether the requested signal is left, right, or off.
+// Set true only for standalone indicator debugging. Keep false for robot use,
+// where the Raspberry Pi selects the requested turn signal.
+constexpr bool TURN_INDICATOR_DEMO_MODE = false;
+constexpr uint8_t TURN_INDICATOR_DEMO_CYCLES_PER_SIDE = 5;
+
+// In normal mode the Raspberry Pi selects left, right, or off. Debug demo mode
+// above ignores Pi indicator commands and alternates sides autonomously.
 constexpr unsigned long TURN_SIGNAL_SEGMENT_MS = 120;
 constexpr unsigned long TURN_SIGNAL_HOLD_MS = 300;
 constexpr unsigned long TURN_SIGNAL_OFF_MS = 350;

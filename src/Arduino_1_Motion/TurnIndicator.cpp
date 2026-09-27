@@ -21,6 +21,7 @@ namespace {
   TurnSignal currentSignal = TURN_OFF;
   AnimationPhase animationPhase = PHASE_BUILD;
   uint8_t animationStep = 0;
+  uint8_t completedBlinkCycles = 0;
   unsigned long lastAnimationStep = 0;
 
   uint8_t arrowRight[8] = {
@@ -63,9 +64,20 @@ void turnIndicatorBegin() {
   matrix.control(MD_MAX72XX::UPDATE, MD_MAX72XX::OFF);
   matrix.clear();
   matrix.update();
+  if (TURN_INDICATOR_DEMO_MODE) {
+    currentSignal = TURN_LEFT;
+    animationPhase = PHASE_BUILD;
+    animationStep = 0;
+    completedBlinkCycles = 0;
+    lastAnimationStep = millis();
+  }
 }
 
 void turnIndicatorSet(TurnSignal signal) {
+  if (TURN_INDICATOR_DEMO_MODE) {
+    return;
+  }
+
   if (currentSignal == signal) {
     return;
   }
@@ -112,6 +124,13 @@ void turnIndicatorUpdate() {
 
     case PHASE_BLANK:
       animationStep = 0;
+      if (TURN_INDICATOR_DEMO_MODE) {
+        completedBlinkCycles++;
+        if (completedBlinkCycles >= TURN_INDICATOR_DEMO_CYCLES_PER_SIDE) {
+          completedBlinkCycles = 0;
+          currentSignal = currentSignal == TURN_LEFT ? TURN_RIGHT : TURN_LEFT;
+        }
+      }
       animationPhase = PHASE_BUILD;
       break;
   }
