@@ -44,7 +44,7 @@ void readRaspberryPiCommand() {
 }
 
 void setup() {
-  Serial.begin(SERIAL_BAUD_RATE);
+  Serial.begin(115200);
   turnIndicatorBegin();
   Serial.println(F("MAX7219:READY"));
 }
