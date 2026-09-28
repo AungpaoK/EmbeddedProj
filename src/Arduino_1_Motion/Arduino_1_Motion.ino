@@ -56,7 +56,10 @@ const float MIN_DRIVE_SPEED   = 0.04;   // ความเร็วขั้น�
 // Automatic breakaway assist: if a wheel receives a real speed target but
 // produces no encoder ticks, add bounded PWM in small steps. This handles
 // static friction without running a stalled motor at full power indefinitely.
-const float STALL_MIN_TARGET_MPS          = 0.05f;
+// Include slow in-place turns in stall detection.  The calibration test uses
+// about 0.043 m/s at each wheel for a 0.25 rad/s turn, which used to fall
+// below this threshold and therefore never received breakaway assistance.
+const float STALL_MIN_TARGET_MPS          = 0.02f;
 const unsigned long STALL_DETECT_MS       = 350;
 const unsigned long STALL_PWM_STEP_MS     = 250;
 const unsigned long STALL_ABORT_MS        = 3000;
@@ -183,6 +186,18 @@ float         targetRightSpeed  = 0.0f;
 unsigned long lastVelocityCmdTime = 0;
 const unsigned long VELOCITY_TIMEOUT_MS = 300;  // ตัดมอเตอร์ทันทีหาก Serial ขาดหายเกิน 300ms
 
+// Continuous-drive straight-line synchronization.  The legacy FORWARD:
+// command already has a position sync loop, but the real ROS delivery path
+// uses V:left,right and previously had only two independent wheel PIDs.  A
+// small amount of floor friction or motor mismatch could therefore make one
+// wheel fall behind and bend the robot's path.
+const float VELOCITY_SYNC_GAIN         = 1.5f;  // position error (m) -> speed trim (m/s)
+const float VELOCITY_SYNC_MAX_TRIM_MPS = 0.04f;
+const float VELOCITY_SYNC_MAX_STEER_RATIO = 0.35f;
+long velocitySyncStartLeftTicks  = 0;
+long velocitySyncStartRightTicks = 0;
+bool velocitySyncEnabled = false;
+
 unsigned long lastControlTime  = 0;
 unsigned long lastEncoderPrint = 0;
 bool motionFaultLatched = false;
@@ -305,6 +320,7 @@ void parseSerialCommand(const String &line) {
         currentCmd = CMD_IDLE;
         targetLeftSpeed = 0.0f;
         targetRightSpeed = 0.0f;
+        velocitySyncEnabled = false;
         motionFaultLatched = false;
         pidLeft.reset();
         pidRight.reset();
@@ -345,6 +361,7 @@ void parseSerialCommand(const String &line) {
                 targetLeftSpeed = 0.0f;
                 targetRightSpeed = 0.0f;
                 currentCmd = CMD_IDLE;
+                velocitySyncEnabled = false;
                 motionFaultLatched = false;
                 pidLeft.reset();
                 pidRight.reset();
@@ -362,6 +379,7 @@ void parseSerialCommand(const String &line) {
                 pidRight.reset();
                 pidLeft.prevTicks = leftTicks;
                 pidRight.prevTicks = rightTicks;
+                velocitySyncEnabled = false;
             }
             targetLeftSpeed     = nextLeftSpeed;
             targetRightSpeed    = nextRightSpeed;
@@ -472,8 +490,39 @@ void executeVelocity(float dt) {
     long leftTicks, rightTicks;
     readTicks(leftTicks, rightTicks);
 
-    float pwmL = pidLeft.compute(leftTicks,  targetLeftSpeed, dt);
-    float pwmR = pidRight.compute(rightTicks, targetRightSpeed, dt);
+    // Only synchronize translation-like commands.  In-place turns have
+    // opposite wheel signs and must not be forced toward equal travel.
+    float largest_target = max(abs(targetLeftSpeed), abs(targetRightSpeed));
+    bool same_direction = targetLeftSpeed * targetRightSpeed > 0.0f;
+    bool close_to_straight = largest_target > 0.01f &&
+                             abs(targetLeftSpeed - targetRightSpeed) <=
+                                 VELOCITY_SYNC_MAX_STEER_RATIO * largest_target;
+    bool should_sync = same_direction && close_to_straight;
+
+    if (should_sync != velocitySyncEnabled) {
+        velocitySyncStartLeftTicks = leftTicks;
+        velocitySyncStartRightTicks = rightTicks;
+        velocitySyncEnabled = should_sync;
+    }
+
+    float sync_trim = 0.0f;
+    if (should_sync) {
+        float leftTravel = (leftTicks - velocitySyncStartLeftTicks) * METERS_PER_PULSE;
+        float rightTravel = (rightTicks - velocitySyncStartRightTicks) * METERS_PER_PULSE;
+        float positionError = leftTravel - rightTravel;
+        sync_trim = constrain(positionError * VELOCITY_SYNC_GAIN,
+                              -VELOCITY_SYNC_MAX_TRIM_MPS,
+                              VELOCITY_SYNC_MAX_TRIM_MPS);
+    }
+
+    // If the left wheel is behind, sync_trim is negative and the left target
+    // becomes stronger while the right target is softened.  This also works
+    // when the robot's configured forward direction is negative.
+    float syncedLeftTarget  = targetLeftSpeed - sync_trim;
+    float syncedRightTarget = targetRightSpeed + sync_trim;
+
+    float pwmL = pidLeft.compute(leftTicks,  syncedLeftTarget, dt);
+    float pwmR = pidRight.compute(rightTicks, syncedRightTarget, dt);
 
     if (encoderStallDetected()) {
         stopForEncoderStall();
