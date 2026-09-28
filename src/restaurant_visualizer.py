@@ -36,21 +36,19 @@ class RestaurantVisualizer(Node):
         )
         self._path_pub = self.create_publisher(RosPath, "/robot_path", 10)
         self._odom_sub = self.create_subscription(Odometry, "/odom", self._on_odom, 10)
-        self._static_tf = tf2_ros.StaticTransformBroadcaster(self)
+        self._tf_broadcaster = tf2_ros.TransformBroadcaster(self)
 
         self._map = self._load_map()
         self._path = RosPath()
         self._path.header.frame_id = "map"
         self._last_path_pose: tuple[float, float, float] | None = None
 
-        self._publish_static_tf()
+        self._publish_map_odom_tf()
         self._publish_layout()
         self._refresh_timer = self.create_timer(1.0, self._publish_layout)
         self.get_logger().info(
-            "Restaurant visualization ready: junction=%.2fm, table1=+%.2fm, table2=-%.2fm",
-            JUNCTION_X,
-            TABLE1_Y,
-            TABLE2_Y,
+            f"Restaurant visualization ready: junction={JUNCTION_X:.2f}m, "
+            f"table1=+{TABLE1_Y:.2f}m, table2=-{TABLE2_Y:.2f}m"
         )
 
     def _load_map(self) -> OccupancyGrid:
@@ -87,16 +85,19 @@ class RestaurantVisualizer(Node):
         grid.data = cells
         return grid
 
-    def _publish_static_tf(self) -> None:
+    def _publish_map_odom_tf(self) -> None:
         transform = TransformStamped()
         transform.header.stamp = self.get_clock().now().to_msg()
         transform.header.frame_id = "map"
         transform.child_frame_id = "odom"
         transform.transform.rotation.w = 1.0
-        self._static_tf.sendTransform(transform)
+        self._tf_broadcaster.sendTransform(transform)
 
     def _publish_layout(self) -> None:
         now = self.get_clock().now().to_msg()
+        # Re-send map->odom TF so late-joining RViz/TF
+        # listeners receive the frame relationship as well as the latched map.
+        self._publish_map_odom_tf()
         self._map.header.stamp = now
         self._map_pub.publish(self._map)
         self._marker_pub.publish(self._make_markers(now))
