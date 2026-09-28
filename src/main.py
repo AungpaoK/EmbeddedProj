@@ -11,8 +11,7 @@ main.py — Food Delivery Robot Entry Point (Unified ROS 2 Hybrid System)
 ตัวเลือก Environment Variable:
     MOTION_BACKEND     — serial (เดิม) หรือ ros (ให้ slam_bridge ถือ Arduino)
     MOTION_PORT        — Serial port ของ Arduino #1  (default: /dev/ttyACM0)
-    SHELF_PORT         — พอร์ต Shelf controller รุ่นเดิม (ปกติใช้ none)
-    BAUD_RATE          — Baud rate ทั้งสอง port       (default: 115200)
+    BAUD_RATE          — Baud rate ของ Arduino มอเตอร์ (default: 115200)
     LIDAR_YAW_OFFSET   — องศาชดเชยการวาง LiDAR เทียบกับหน้ารถ (default: 0.0)
     LIDAR_STOP_DIST    — ระยะหยุดฉุกเฉิน LiDAR (เมตร, default: 0.30)
     LOG_LEVEL          — DEBUG / INFO / WARNING        (default: INFO)
@@ -33,13 +32,11 @@ except ImportError:
 # Local imports
 from config import (
     MOTION_SERIAL_PORT,
-    SHELF_SERIAL_PORT,
     SERIAL_BAUD,
     SERIAL_TIMEOUT,
 )
 from odometry import Odometry, RosOdometry
 from motion_client import MotionClient, RosMotionClient
-from shelf_client import ShelfClient, VirtualShelfClient
 from delivery_fsm import DeliveryFSM
 from pos_server import PosBridge, PosServer
 from lidar_safety import LidarSafetyGuard
@@ -86,14 +83,11 @@ def _find_motion_port(preferred: str) -> str:
     return preferred
 
 
-def _open_serial(port: str, baud: int, timeout: float, label: str, optional: bool = False):
+def _open_serial(port: str, baud: int, timeout: float, label: str):
     if not port or port.lower() in ("none", "null", "false", "mock", ""):
         logging.getLogger(__name__).info(f"[{label}] Port disabled ('{port}').")
         return None
     if serial is None:
-        if optional:
-            logging.getLogger(__name__).warning(f"[{label}] pyserial is not installed. Running in Optional/Virtual mode.")
-            return None
         logging.getLogger(__name__).critical(f"[{label}] pyserial is not installed! Run: sudo apt install python3-serial")
         sys.exit(1)
     try:
@@ -101,9 +95,6 @@ def _open_serial(port: str, baud: int, timeout: float, label: str, optional: boo
         logging.getLogger(__name__).info(f"[{label}] Connected: {port} @ {baud} baud")
         return ser
     except (serial.SerialException, FileNotFoundError, OSError) as e:
-        if optional:
-            logging.getLogger(__name__).warning(f"[{label}] Port {port} not available: {e}. (Running in Optional/Virtual mode)")
-            return None
         logging.getLogger(__name__).critical(f"[{label}] Cannot open {port}: {e}")
         sys.exit(1)
 
@@ -205,13 +196,12 @@ if HAS_ROS2:
 # ===========================================================
 # Graceful Shutdown Handler
 # ===========================================================
-def _make_shutdown_handler(odom: Odometry, shelf: ShelfClient, motion: MotionClient):
+def _make_shutdown_handler(odom: Odometry, motion: MotionClient):
     def _handler(sig, frame):
         print("\n[main] Shutting down... stopping motors")
         motion.stop_continuous()
         motion.stop()
         odom.stop()
-        shelf.stop()
         if HAS_ROS2 and rclpy.ok():
             rclpy.shutdown()
         sys.exit(0)
@@ -234,7 +224,6 @@ def main() -> None:
     motion_port = os.environ.get("MOTION_PORT", MOTION_SERIAL_PORT)
     if motion_backend == "serial":
         motion_port = _find_motion_port(motion_port)
-    shelf_port  = os.environ.get("SHELF_PORT",  SHELF_SERIAL_PORT)
     baud        = int(os.environ.get("BAUD_RATE", SERIAL_BAUD))
     yaw_offset  = float(os.environ.get("LIDAR_YAW_OFFSET", "0.0"))
     stop_dist   = float(os.environ.get("LIDAR_STOP_DIST", "0.30"))
@@ -246,7 +235,6 @@ def main() -> None:
         "  Motion backend   : %s",
         "ROS topics (/cmd_vel, /odom)" if motion_backend == "ros" else f"serial ({motion_port})",
     )
-    logger.info(f"  Shelf Arduino    : {shelf_port} (Optional)")
     logger.info(f"  LiDAR Yaw Offset : {yaw_offset}°")
     logger.info(f"  LiDAR Stop Dist  : {stop_dist} m")
     logger.info(f"  ROS 2 Status     : {'Available' if HAS_ROS2 else 'Standalone / No ROS 2'}")
@@ -282,16 +270,6 @@ def main() -> None:
         motion = MotionClient(motion_ser)
         odometry = Odometry(motion_ser, keypad_handler=pos_bridge.handle_keypad_key)
 
-    # Shelf serial remains owned by main.py; it is a separate optional device.
-    shelf_ser = _open_serial(shelf_port, baud, SERIAL_TIMEOUT, "Shelf", optional=True)
-
-    # Shelf Subsystem (Hardware or Virtual Fallback)
-    if shelf_ser is not None:
-        shelf = ShelfClient(shelf_ser)
-    else:
-        logger.info("[main] Arduino #2 (Shelf) not connected. Running with VirtualShelfClient.")
-        shelf = VirtualShelfClient(auto_dispatch=False)
-
     # --- ROS 2 Node Spin (Optional for serial backend) ---
     if HAS_ROS2 and ros_node is None:
         rclpy.init()
@@ -324,11 +302,10 @@ def main() -> None:
     )
 
     # --- Register Ctrl+C Shutdown ---
-    signal.signal(signal.SIGINT, _make_shutdown_handler(odometry, shelf, motion))
+    signal.signal(signal.SIGINT, _make_shutdown_handler(odometry, motion))
 
     # --- Start Background Threads ---
     odometry.start()
-    shelf.start()
 
     logger.info("[main] All subsystems started. Launching Main FSM.")
 
@@ -336,7 +313,6 @@ def main() -> None:
     fsm = DeliveryFSM(
         motion=motion,
         odometry=odometry,
-        shelf=shelf,
         pos_bridge=pos_bridge,
         waypoint_controller=waypoint_ctrl,
     )
@@ -358,13 +334,10 @@ def main() -> None:
             pos_server.stop()
         motion.stop_continuous()
         odometry.stop()
-        shelf.stop()
         if HAS_ROS2 and rclpy.ok():
             rclpy.shutdown()
         if motion_ser is not None:
             motion_ser.close()
-        if shelf_ser is not None:
-            shelf_ser.close()
         logger.info("[main] Shutdown complete.")
 
 

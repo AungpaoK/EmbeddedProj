@@ -28,7 +28,6 @@ METERS_PER_TICK: float = (2.0 * 3.14159265 * WHEEL_RADIUS) / TICKS_PER_REV
 # LiDAR uses a USB serial adapter; Motion Arduino uses the Uno CDC serial port.
 # ===========================================================
 MOTION_SERIAL_PORT: str = "/dev/ttyACM0"  # Arduino #1 (Motion)
-SHELF_SERIAL_PORT: str = "none"            # Arduino #2 (Shelf) — ตั้งเป็น "none" เมื่อยังไม่ได้ต่อ (ใช้ VirtualShelf แทน)
 SERIAL_BAUD: int = 115200
 # Keep motion baud separate from shelf baud.  Arduino_1_Motion.ino uses
 # Serial.begin(115200), so the fallback must match even when tmux does not
@@ -73,6 +72,3 @@ MOTION_COMMAND_TIMEOUT_S: float = 30.0 # s  — timeout รอ STATUS:DONE จ�
 PICKUP_WAIT_TIMEOUT_S: float = 120.0   # s  — timeout รอลูกค้าหยิบอาหาร (Manual Override จะข้ามได้)
 
 # ===========================================================
-# Shelf Configuration
-# ===========================================================
-NUM_SHELVES: int = 2   # จำนวนชั้นวางอาหาร (ชั้น 1 = Floor 2, ชั้น 2 = Floor 3)

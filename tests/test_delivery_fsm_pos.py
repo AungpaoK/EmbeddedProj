@@ -3,7 +3,6 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from queue import Empty, Queue
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -50,21 +49,6 @@ class FakeOdometry:
         self.reset_count += 1
 
 
-class FakeShelf:
-    def __init__(self):
-        self.overrides = Queue()
-
-    def lcd_print(self, _row, _text):
-        pass
-
-    def consume_override(self):
-        try:
-            self.overrides.get_nowait()
-            return True
-        except Empty:
-            return False
-
-
 class FakeWaypoints:
     def __init__(self, table_results=None, begin_result=True, return_result=True):
         self.calls = []
@@ -87,19 +71,17 @@ class FakeWaypoints:
 
 
 class DeliveryFsmPosTests(unittest.TestCase):
-    def make_fsm(self, bridge, shelf=None, waypoints=None):
+    def make_fsm(self, bridge, waypoints=None):
         motion = FakeMotion()
         odometry = FakeOdometry()
-        shelf = shelf or FakeShelf()
         waypoints = waypoints or FakeWaypoints()
         fsm = DeliveryFSM(
             motion=motion,
             odometry=odometry,
-            shelf=shelf,
             pos_bridge=bridge,
             waypoint_controller=waypoints,
         )
-        return fsm, motion, odometry, shelf, waypoints
+        return fsm, motion, odometry, waypoints
 
     def begin_mission(self, bridge, fsm, orders):
         accepted = bridge.submit_mission(orders)
@@ -128,7 +110,7 @@ class DeliveryFsmPosTests(unittest.TestCase):
 
     def test_single_order_waits_for_manual_pickup_then_returns_home(self):
         bridge = PosBridge()
-        fsm, _motion, odometry, _shelf, waypoints = self.make_fsm(bridge)
+        fsm, _motion, odometry, waypoints = self.make_fsm(bridge)
         accepted = self.begin_mission(
             bridge,
             fsm,
@@ -163,7 +145,7 @@ class DeliveryFsmPosTests(unittest.TestCase):
 
     def test_two_orders_are_sent_by_shelf_order_and_confirmed_one_at_a_time(self):
         bridge = PosBridge()
-        fsm, _motion, _odometry, _shelf, waypoints = self.make_fsm(bridge)
+        fsm, _motion, _odometry, waypoints = self.make_fsm(bridge)
         accepted = self.begin_mission(
             bridge,
             fsm,
@@ -187,25 +169,21 @@ class DeliveryFsmPosTests(unittest.TestCase):
         self.assertEqual(fsm._state, State.RETURN_STATION)
         self.assertEqual(_motion.mission_active, [True])
 
-    def test_physical_override_completes_pickup_wait(self):
+    def test_pos_confirmation_completes_pickup_wait(self):
         bridge = PosBridge()
-        shelf = FakeShelf()
-        fsm, _motion, _odometry, shelf, _waypoints = self.make_fsm(bridge, shelf=shelf)
+        fsm, _motion, _odometry, _waypoints = self.make_fsm(bridge)
         self.begin_mission(
             bridge,
             fsm,
             [{"shelf": 1, "table_id": 2, "loaded_confirmed": True}],
         )
         fsm._state_delivering()
-        shelf.overrides.put(True)
-
         wait_thread = threading.Thread(target=fsm._state_wait_pickup)
         wait_thread.start()
         self.wait_for_pickup_state(bridge, wait_thread)
         wait_thread.join(timeout=0.15)
-        self.assertTrue(wait_thread.is_alive(), "An override pressed before arrival must be discarded")
-
-        shelf.overrides.put(True)
+        self.assertTrue(wait_thread.is_alive(), "Pickup confirmation should come from POS")
+        self.confirm_current_pickup(bridge, "mission", fsm)
         wait_thread.join(timeout=1.0)
         self.assertFalse(wait_thread.is_alive())
         self.assertEqual(fsm._state, State.CHECK_REMAIN)
@@ -213,7 +191,7 @@ class DeliveryFsmPosTests(unittest.TestCase):
     def test_navigation_failure_latches_error_and_stops_robot(self):
         bridge = PosBridge()
         waypoints = FakeWaypoints(table_results=[False])
-        fsm, motion, _odometry, _shelf, _waypoints = self.make_fsm(
+        fsm, motion, _odometry, _waypoints = self.make_fsm(
             bridge,
             waypoints=waypoints,
         )

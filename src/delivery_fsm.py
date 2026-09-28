@@ -13,7 +13,6 @@ from config import ARRIVAL_TOLERANCE_M, JUNCTION_X, TABLE1_Y, TABLE2_Y
 from motion_client import MotionClient
 from odometry import Odometry
 from pos_server import PosBridge
-from shelf_client import ShelfClient
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +41,11 @@ class DeliveryFSM:
         self,
         motion: MotionClient,
         odometry: Odometry,
-        shelf: ShelfClient,
         pos_bridge: PosBridge,
         waypoint_controller=None,
     ) -> None:
         self._motion = motion
         self._odom = odometry
-        self._shelf = shelf
         self._pos = pos_bridge
         self._waypoint_ctrl = waypoint_controller
 
@@ -144,8 +141,6 @@ class DeliveryFSM:
         self._print_status(
             f"{message} (ชั้น {order.shelf})"
         )
-        self._shelf.lcd_print(0, f"Delivering T{order.table_id}")
-        self._shelf.lcd_print(1, f"Shelf {order.shelf}...")
 
         try:
             reached = self._navigate_to_table(order, self._current_order_index)
@@ -163,8 +158,6 @@ class DeliveryFSM:
             self._latch_error(f"ไปไม่ถึงโต๊ะ {order.table_id}; หยุดหุ่นยนต์แล้ว")
             return
 
-        self._shelf.lcd_print(0, f"Arrived T{order.table_id}!")
-        self._shelf.lcd_print(1, "Waiting for pickup")
         self._state = State.WAIT_PICKUP
 
     def _navigate_to_table(self, order: DeliveryOrder, index: int) -> bool:
@@ -214,9 +207,6 @@ class DeliveryFSM:
             return
 
         order = self._orders[self._current_order_index]
-        while self._shelf.consume_override():
-            logger.warning("[FSM] Discarded a physical override pressed before arrival.")
-
         message = f"ถึงโต๊ะ {order.table_id} แล้ว กรุณายืนยันเมื่อรับอาหาร"
         self._pos.set_state(
             "WAITING_PICKUP",
@@ -226,18 +216,12 @@ class DeliveryFSM:
         self._print_status(
             f"รอผู้ใช้ยืนยันรับอาหาร โต๊ะ {order.table_id} ชั้น {order.shelf}"
         )
-        self._shelf.lcd_print(0, f"Waiting T{order.table_id}")
-        self._shelf.lcd_print(1, "Confirm on POS")
 
         expected = (self._mission_id, self._current_order_index)
         while True:
             if self._pos.cancel_event.is_set():
                 self._finish_cancelled()
                 return
-            if self._shelf.consume_override():
-                logger.info("[FSM] Physical pickup override pressed.")
-                break
-
             confirmation = self._pos.take_pickup_confirmation(timeout=0.1)
             if confirmation is None:
                 continue
@@ -297,8 +281,6 @@ class DeliveryFSM:
         if next_index < len(self._orders):
             self._current_order_index = next_index
             next_order = self._orders[next_index]
-            self._shelf.lcd_print(0, "Next delivery...")
-            self._shelf.lcd_print(1, f"Table {next_order.table_id}")
             self._state = State.DELIVERING
             return
 
@@ -315,8 +297,6 @@ class DeliveryFSM:
             current_order_index=self._current_order_index,
         )
         self._print_status("กำลังกลับ Serve Station")
-        self._shelf.lcd_print(0, "Returning home...")
-        self._shelf.lcd_print(1, "Please wait")
 
         try:
             if self._waypoint_ctrl is not None:
@@ -340,8 +320,6 @@ class DeliveryFSM:
 
         self._set_delivery_mission_active(False)
         self._odom.reset()
-        self._shelf.lcd_print(0, "Home! Ready.")
-        self._shelf.lcd_print(1, "")
         self._pos.set_state(
             "COMPLETED",
             message="กลับถึงครัวแล้ว พร้อมรับงานรอบใหม่",
@@ -370,11 +348,6 @@ class DeliveryFSM:
     def _finish_cancelled(self) -> None:
         self._stop_for_cancel()
         self._set_delivery_mission_active(False)
-        try:
-            self._shelf.lcd_print(0, "Mission cancelled")
-            self._shelf.lcd_print(1, "Robot stopped")
-        except Exception:
-            logger.exception("[FSM] Could not update shelf display after cancellation")
         self._orders = []
         self._mission_id = None
         self._current_order_index = None
