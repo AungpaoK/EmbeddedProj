@@ -10,9 +10,9 @@ from waypoint_controller import WaypointController, normalize_angle
 
 
 class SimPose:
-    def __init__(self, heading=0.0):
-        self.x = 0.0
-        self.y = 0.0
+    def __init__(self, heading=0.0, x=0.0, y=0.0):
+        self.x = x
+        self.y = y
         self.heading = heading
 
     @property
@@ -99,8 +99,8 @@ class OneShotObstacleSafety:
         return True
 
 
-def make_controller(*, heading=0.0, safety=None):
-    pose = SimPose(heading)
+def make_controller(*, heading=0.0, x=0.0, y=0.0, safety=None, **controller_kwargs):
+    pose = SimPose(heading, x=x, y=y)
     motion = SimMotion()
     clock = SimClock(pose, motion)
     controller = WaypointController(
@@ -109,6 +109,7 @@ def make_controller(*, heading=0.0, safety=None):
         lambda: pose.value,
         ready_provider=lambda: True,
         pose_fresh_provider=lambda: True,
+        **controller_kwargs,
         monotonic=clock.monotonic,
         sleep=clock.sleep,
     )
@@ -212,6 +213,56 @@ class WaypointControllerTests(unittest.TestCase):
         self.assertTrue(controller.drive_forward(0.10, 0.0))
 
         self.assertEqual(motion.turn_intents, [])
+
+    def test_cross_track_correction_turns_back_toward_line(self):
+        controller, pose, motion, _clock = make_controller()
+        self.assertTrue(controller.begin_mission())
+
+        # Simulate a lateral odometry deviation after the mission frame was
+        # captured. Positive y is left of a +x route, so correction must turn
+        # right (negative angular velocity).
+        pose.y = 0.12
+        self.assertTrue(
+                controller.drive_to_waypoint(
+                0.80,
+                0.0,
+                0.0,
+                line_start=(0.0, 0.0),
+                timeout_s=8.0,
+            )
+        )
+
+        self.assertLess(pose.y, 0.12)
+        self.assertTrue(any(linear > 0.0 and angular < 0.0 for linear, angular in motion.commands))
+
+    def test_cross_track_can_be_disabled_for_legacy_ab_comparison(self):
+        controller, _pose, _motion, _clock = make_controller(cross_track_enabled=False)
+        self.assertTrue(controller.begin_mission())
+
+        self.assertAlmostEqual(
+            controller._compute_drive_correction(0.0, 0.20),
+            0.0,
+            places=6,
+        )
+
+    def test_waypoint_requires_heading_after_reaching_position(self):
+        controller, pose, motion, _clock = make_controller()
+        self.assertTrue(controller.begin_mission())
+        pose.x = 0.15
+        pose.heading = math.radians(90.0)
+
+        self.assertTrue(
+            controller.drive_to_waypoint(
+                0.15,
+                0.0,
+                0.0,
+                line_start=(0.0, 0.0),
+                timeout_s=5.0,
+            )
+        )
+
+        self.assertLess(abs(pose.heading), math.radians(5.0))
+        self.assertTrue(any(linear == 0.0 for linear, _angular in motion.commands))
 
     def test_cancelled_heading_turn_clears_turn_intent(self):
         controller, _pose, motion, _clock = make_controller()

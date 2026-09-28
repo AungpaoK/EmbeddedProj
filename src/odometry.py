@@ -18,10 +18,12 @@ except ImportError:
 import logging
 
 from config import (
+    LEFT_TICK_SCALE,
     WHEEL_RADIUS,
     WHEEL_BASE,
     TICKS_PER_REV,
     METERS_PER_TICK,
+    RIGHT_TICK_SCALE,
 )
 
 logger = logging.getLogger(__name__)
@@ -166,8 +168,8 @@ class Odometry:
             self._last_right_ticks = right_ticks
 
             # Convert Ticks → Meters
-            d_left = d_left_ticks * METERS_PER_TICK
-            d_right = d_right_ticks * METERS_PER_TICK
+            d_left = d_left_ticks * METERS_PER_TICK * LEFT_TICK_SCALE
+            d_right = d_right_ticks * METERS_PER_TICK * RIGHT_TICK_SCALE
 
             # Differential Kinematics
             d_center = (d_left + d_right) / 2.0
@@ -184,6 +186,17 @@ class Odometry:
                 self.theta -= 2.0 * math.pi
             while self.theta < -math.pi:
                 self.theta += 2.0 * math.pi
+
+            logger.debug(
+                "[ODOM] ticks=(%d,%d) d=(%.4f,%.4f)m pose=(%.3f,%.3f,%.1f°)",
+                left_ticks,
+                right_ticks,
+                d_left,
+                d_right,
+                self.x,
+                self.y,
+                math.degrees(self.theta),
+            )
 
 
 class RosOdometry:

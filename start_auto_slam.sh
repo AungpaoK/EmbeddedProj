@@ -55,7 +55,7 @@ tmux send-keys -t "$SESSION:0.0" \
 # ช่องที่ 2 (บนขวา - Pane 1): SLAM Bridge (จัดการ DTR และรอ ENCODER เอง)
 # ------------------------------------------------------------------------------
 tmux send-keys -t "$SESSION:0.1" \
-  "source /opt/ros/jazzy/setup.bash && cd ~/EmbeddedProj/src && sleep 2 && echo '=== [2] Starting SLAM Bridge on $MOTION_PORT at $MOTION_SERIAL_BAUD baud ===' && MOTION_PORT=$MOTION_PORT MOTION_SERIAL_BAUD=$MOTION_SERIAL_BAUD INVERT_LINEAR=1 INVERT_STEER=1 INVERT_ODOM_YAW=0 ODOM_TRACK_WIDTH_FACTOR=1.185 LIDAR_OFFSET_X=0.15 LIDAR_OFFSET_Y=0.0 LIDAR_YAW_OFFSET=180 SELF_FILTER_RADIUS=0.195 python3 slam_bridge.py" C-m
+  "source /opt/ros/jazzy/setup.bash && cd ~/EmbeddedProj/src && sleep 2 && echo '=== [2] Starting SLAM Bridge on $MOTION_PORT at $MOTION_SERIAL_BAUD baud ===' && MOTION_PORT=$MOTION_PORT MOTION_SERIAL_BAUD=$MOTION_SERIAL_BAUD INVERT_LINEAR=1 INVERT_STEER=1 INVERT_ODOM_YAW=0 LIDAR_OFFSET_X=0.15 LIDAR_OFFSET_Y=0.0 LIDAR_YAW_OFFSET=180 SELF_FILTER_RADIUS=0.195 python3 slam_bridge.py" C-m
 
 # ------------------------------------------------------------------------------
 # ช่องที่ 3 (ล่างซ้าย - Pane 2): SLAM Toolbox (รอ 4 วินาที ให้ TF พร้อม)

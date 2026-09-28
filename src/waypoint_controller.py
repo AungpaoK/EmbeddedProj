@@ -21,10 +21,18 @@ from typing import Callable, Optional, Tuple
 
 from config import (
     ARRIVAL_TOLERANCE_M,
+    CROSS_TRACK_CONTROL_ENABLED,
+    CROSS_TRACK_GAIN,
+    HEADING_GAIN,
     JUNCTION_X,
+    MAX_CROSS_TRACK_CORRECTION,
+    MIN_LINEAR_SPEED,
+    TELEMETRY_INTERVAL_S,
     TABLE1_Y,
     TABLE2_Y,
     TABLE_STOP_TOLERANCE_M,
+    WAYPOINT_HEADING_TOLERANCE_DEG,
+    WAYPOINT_POSITION_TOLERANCE_M,
 )
 from turn_indicator import TURN_LEFT, TURN_OFF, TURN_RIGHT
 
@@ -53,6 +61,13 @@ class WaypointController:
         preflight_timeout_s: float = 12.0,
         cancel_event: threading.Event | None = None,
         obstacle_handler: Callable[[bool], None] | None = None,
+        cross_track_enabled: bool | None = None,
+        cross_track_gain: float | None = None,
+        heading_gain: float | None = None,
+        max_cross_track_correction: float | None = None,
+        min_linear_speed: float | None = None,
+        waypoint_position_tolerance_m: float | None = None,
+        waypoint_heading_tolerance_degrees: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
@@ -72,10 +87,40 @@ class WaypointController:
         self._obstacle_handler = obstacle_handler
         self._obstacle_reported = False
 
+        self.cross_track_enabled = (
+            CROSS_TRACK_CONTROL_ENABLED
+            if cross_track_enabled is None
+            else bool(cross_track_enabled)
+        )
+        self.cross_track_gain = (
+            CROSS_TRACK_GAIN if cross_track_gain is None else float(cross_track_gain)
+        )
+        self.heading_gain = HEADING_GAIN if heading_gain is None else float(heading_gain)
+        self.max_cross_track_correction = (
+            MAX_CROSS_TRACK_CORRECTION
+            if max_cross_track_correction is None
+            else float(max_cross_track_correction)
+        )
+        self.min_linear_speed = (
+            MIN_LINEAR_SPEED if min_linear_speed is None else float(min_linear_speed)
+        )
+        self.waypoint_position_tolerance_m = (
+            WAYPOINT_POSITION_TOLERANCE_M
+            if waypoint_position_tolerance_m is None
+            else float(waypoint_position_tolerance_m)
+        )
+        self.waypoint_heading_tolerance_degrees = (
+            WAYPOINT_HEADING_TOLERANCE_DEG
+            if waypoint_heading_tolerance_degrees is None
+            else float(waypoint_heading_tolerance_degrees)
+        )
+
         self._active = False
         self._start_heading: float | None = None
+        self._mission_origin: tuple[float, float] | None = None
         self._location = "home"
         self.last_error: str | None = None
+        self._last_telemetry_time = float("-inf")
 
     def begin_mission(self) -> bool:
         """Wait for healthy motion feedback and capture the mission heading."""
@@ -86,12 +131,15 @@ class WaypointController:
                 self._motion.stop_continuous()
                 return False
             if self._is_ready() and self._is_pose_fresh():
-                _x, _y, heading = self._get_pose()
+                x, y, heading = self._get_pose()
                 self._start_heading = normalize_angle(heading)
+                self._mission_origin = (x, y)
                 self._location = "home"
                 self._active = True
                 logger.info(
-                    "[Route] Mission frame captured at heading %.1f degrees.",
+                    "[Route] Mission frame captured at origin=(%.2f, %.2f), heading %.1f degrees.",
+                    x,
+                    y,
                     math.degrees(self._start_heading),
                 )
                 return True
@@ -117,13 +165,20 @@ class WaypointController:
         target_distance = TABLE1_Y if table_id == 1 else TABLE2_Y
 
         if self._location == "home":
-            if not self.drive_forward(JUNCTION_X, self._start_heading):
+            if not self.drive_to_waypoint(
+                JUNCTION_X,
+                0.0,
+                0.0,
+                line_start=(0.0, 0.0),
+            ):
                 return False
             if not self.turn_to_heading(target_heading):
                 return False
-            if not self.drive_forward(
-                target_distance,
-                target_heading,
+            if not self.drive_to_waypoint(
+                JUNCTION_X,
+                side * target_distance,
+                side * math.pi / 2.0,
+                line_start=(JUNCTION_X, 0.0),
                 table_id=table_id,
             ):
                 return False
@@ -132,9 +187,12 @@ class WaypointController:
             previous_distance = TABLE1_Y if previous_table == 1 else TABLE2_Y
             if not self.turn_to_heading(target_heading):
                 return False
-            if not self.drive_forward(
-                previous_distance + target_distance,
-                target_heading,
+            previous_side = 1.0 if previous_table == 1 else -1.0
+            if not self.drive_to_waypoint(
+                JUNCTION_X,
+                side * target_distance,
+                side * math.pi / 2.0,
+                line_start=(JUNCTION_X, previous_side * previous_distance),
                 table_id=table_id,
             ):
                 return False
@@ -162,11 +220,21 @@ class WaypointController:
 
         if not self.turn_to_heading(heading_to_junction):
             return False
-        if not self.drive_forward(table_distance, heading_to_junction):
+        if not self.drive_to_waypoint(
+            JUNCTION_X,
+            0.0,
+            -side * math.pi / 2.0,
+            line_start=(JUNCTION_X, side * table_distance),
+        ):
             return False
         if not self.turn_to_heading(heading_to_kitchen):
             return False
-        if not self.drive_forward(JUNCTION_X, heading_to_kitchen):
+        if not self.drive_to_waypoint(
+            0.0,
+            0.0,
+            math.pi,
+            line_start=(JUNCTION_X, 0.0),
+        ):
             return False
         if not self.turn_to_heading(self._start_heading):
             return False
@@ -183,55 +251,165 @@ class WaypointController:
         timeout_s: Optional[float] = None,
         table_id: int | None = None,
     ) -> bool:
-        """Drive a measured distance while correcting yaw drift.
+        """Compatibility wrapper that drives one segment from the current pose.
 
-        ``table_id`` marks the final leg to a table parking pose. The pose is
-        still reached from odometry; the only special handling is that the
-        arrival check runs before the LiDAR pause check on each control cycle.
-        This lets a table remain in front of the robot after it has safely
-        reached the stand-off pose without treating the table as a blockage.
-        Obstacles encountered before that pose continue to stop the robot.
+        Route missions use :meth:`drive_to_waypoint`, which knows the nominal
+        segment endpoints.  Keeping this wrapper preserves the public API used
+        by older callers and unit tests while changing arrival detection to a
+        position-based check.
         """
+        if self._start_heading is None or self._mission_origin is None:
+            return self._fail("ยังไม่ได้เริ่ม mission frame")
+
+        x, y, _heading = self._get_pose()
+        current_x, current_y, _current_heading = self._to_mission_pose(x, y, _heading)
+        local_heading = normalize_angle(target_heading - self._start_heading)
+        target_x = current_x + distance * math.cos(local_heading)
+        target_y = current_y + distance * math.sin(local_heading)
+        return self._drive_to_waypoint_local(
+            target_x,
+            target_y,
+            local_heading,
+            line_start=(current_x, current_y),
+            timeout_s=timeout_s,
+            table_id=table_id,
+        )
+
+    def drive_to_waypoint(
+        self,
+        target_x: float,
+        target_y: float,
+        target_heading: float,
+        *,
+        line_start: tuple[float, float] = (0.0, 0.0),
+        timeout_s: Optional[float] = None,
+        table_id: int | None = None,
+    ) -> bool:
+        """Drive to a mission-frame waypoint along a nominal line segment.
+
+        ``target_x``, ``target_y``, ``target_heading`` and ``line_start`` are
+        expressed in the mission frame captured by :meth:`begin_mission`:
+        home is ``(0, 0)`` and the initial heading is zero.  The controller
+        transforms this geometry into odometry coordinates and combines
+        heading feedback with signed cross-track feedback.
+        """
+        if self._start_heading is None or self._mission_origin is None:
+            return self._fail("ยังไม่ได้เริ่ม mission frame")
+        if table_id is not None and table_id not in (1, 2):
+            return self._fail(f"ไม่รู้จักโต๊ะ {table_id}")
+
+        return self._drive_to_waypoint_local(
+            float(target_x),
+            float(target_y),
+            normalize_angle(float(target_heading)),
+            line_start=(float(line_start[0]), float(line_start[1])),
+            timeout_s=timeout_s,
+            table_id=table_id,
+        )
+
+    def _drive_to_waypoint_local(
+        self,
+        target_x: float,
+        target_y: float,
+        target_heading: float,
+        *,
+        line_start: tuple[float, float],
+        timeout_s: Optional[float],
+        table_id: int | None,
+    ) -> bool:
+        """Implementation for a fixed-route segment in mission coordinates."""
         if table_id is not None and table_id not in (1, 2):
             return self._fail(f"ไม่รู้จักโต๊ะ {table_id}")
 
         arrival_tolerance = (
             TABLE_STOP_TOLERANCE_M if table_id is not None else ARRIVAL_TOLERANCE_M
         )
-        if distance <= arrival_tolerance:
-            return True
+        arrival_tolerance = max(
+            arrival_tolerance,
+            self.waypoint_position_tolerance_m,
+        )
+        segment_distance = math.hypot(target_x - line_start[0], target_y - line_start[1])
         if not self._feedback_healthy():
             return self._fail("Arduino หรือ odometry ไม่พร้อมก่อนเริ่มเดินหน้า")
 
         target_heading = normalize_angle(target_heading)
+        line_heading = normalize_angle(math.atan2(target_y - line_start[1], target_x - line_start[0]))
+        # The route heading is authoritative for the final pose, while the
+        # geometric line supplies the cross-track reference.  They should
+        # normally agree; using the explicit route heading keeps heading
+        # tolerances meaningful even when a route is edited later.
+        if segment_distance > 0.0 and abs(normalize_angle(target_heading - line_heading)) > math.radians(5.0):
+            logger.warning(
+                "[Route] Segment heading %.1f° differs from line heading %.1f°.",
+                math.degrees(target_heading),
+                math.degrees(line_heading),
+            )
+
+        _, _, target_odom_heading = self._from_mission_pose(
+            target_x, target_y, target_heading
+        )
         last_x, last_y, _heading = self._get_pose()
         traveled = 0.0
-        timeout_s = timeout_s or (distance / max(self.linear_speed, 0.05)) * 2.5 + 5.0
+        timeout_s = timeout_s or (segment_distance / max(self.linear_speed, 0.05)) * 2.5 + 5.0
         deadline = self._clock() + timeout_s
         last_progress_time = self._clock()
         last_progress_distance = 0.0
 
         logger.info(
-            "[Route] Drive %.2fm at heading %.1f degrees.",
-            distance,
+            "[Route] Drive to waypoint local=(%.2f, %.2f), heading %.1f°, segment %.2fm, cross-track=%s.",
+            target_x,
+            target_y,
             math.degrees(target_heading),
+            segment_distance,
+            "on" if self.cross_track_enabled else "off",
         )
 
         while self._active and not self._cancel_event.is_set():
             if not self._feedback_healthy():
                 return self._fail("Arduino หรือ odometry ขาดการตอบสนองระหว่างเดินหน้า")
             if self._clock() > deadline:
-                return self._fail(f"เดินหน้าไม่ครบระยะ {traveled:.2f}/{distance:.2f} เมตร")
+                return self._fail(
+                    f"เดินหน้าไม่ถึง waypoint: remaining={self._remaining_distance(target_x, target_y):.2f}m"
+                )
+
+            x, y, heading = self._get_pose()
+            local_x, local_y, local_heading = self._to_mission_pose(x, y, heading)
+            remaining = math.hypot(target_x - local_x, target_y - local_y)
+            heading_error = normalize_angle(target_heading - local_heading)
+            cross_track_error = self._cross_track_error(
+                local_x,
+                local_y,
+                line_start,
+                line_heading,
+            )
 
             # The parking pose is the navigation goal. Check it first so a
             # physical table that is expected to remain in front of the robot
             # cannot leave the POS in an obstacle state after arrival.
-            if traveled >= max(0.0, distance - arrival_tolerance):
-                return self._complete_straight_leg(
-                    traveled=traveled,
-                    distance=distance,
-                    table_id=table_id,
-                )
+            if remaining <= arrival_tolerance:
+                self._motion.stop_continuous()
+                if abs(math.degrees(heading_error)) <= self.waypoint_heading_tolerance_degrees:
+                    return self._complete_straight_leg(
+                        remaining=remaining,
+                        table_id=table_id,
+                    )
+                if not self.turn_to_heading(
+                    target_odom_heading,
+                    tolerance_degrees=self.waypoint_heading_tolerance_degrees,
+                ):
+                    return False
+                x, y, heading = self._get_pose()
+                local_x, local_y, local_heading = self._to_mission_pose(x, y, heading)
+                remaining = math.hypot(target_x - local_x, target_y - local_y)
+                heading_error = normalize_angle(target_heading - local_heading)
+                if (
+                    remaining <= arrival_tolerance
+                    and abs(math.degrees(heading_error)) <= self.waypoint_heading_tolerance_degrees
+                ):
+                    return self._complete_straight_leg(
+                        remaining=remaining,
+                        table_id=table_id,
+                    )
 
             self._report_obstacle_state()
             # _report_obstacle_state samples the safety guard once and keeps
@@ -247,15 +425,23 @@ class WaypointController:
                 last_progress_time += paused_for
                 continue
 
-            x, y, heading = self._get_pose()
-            heading_error = normalize_angle(target_heading - heading)
-            correction = 0.0
-            if abs(heading_error) > math.radians(1.0):
-                correction = max(-0.5, min(0.5, 1.8 * heading_error))
-                if abs(correction) < 0.12:
-                    correction = math.copysign(0.12, correction)
+            correction = self._compute_drive_correction(heading_error, cross_track_error)
+            command_speed = self._compute_drive_speed(heading_error, cross_track_error)
 
-            if not self._motion.drive_continuous(self.linear_speed, correction):
+            self._log_navigation_telemetry(
+                local_x=local_x,
+                local_y=local_y,
+                local_heading=local_heading,
+                target_x=target_x,
+                target_y=target_y,
+                heading_error=heading_error,
+                cross_track_error=cross_track_error,
+                remaining=remaining,
+                linear_speed=command_speed,
+                angular_speed=correction,
+            )
+
+            if not self._motion.drive_continuous(command_speed, correction):
                 return self._fail("ส่งคำสั่งความเร็วเดินหน้าไม่สำเร็จ")
 
             self._sleep(self.control_period)
@@ -273,19 +459,143 @@ class WaypointController:
         self._motion.stop_continuous()
         if self._cancel_event.is_set():
             return False
-        if traveled >= max(0.0, distance - arrival_tolerance):
-            return self._complete_straight_leg(
-                traveled=traveled,
-                distance=distance,
-                table_id=table_id,
+        return self._fail(
+            f"ภารกิจนำทางหยุดก่อนถึง waypoint: remaining={self._remaining_distance(target_x, target_y):.2f}m"
+        )
+
+    def _to_mission_pose(
+        self,
+        x: float,
+        y: float,
+        heading: float,
+    ) -> tuple[float, float, float]:
+        """Transform an odometry pose into the mission-local route frame."""
+        if self._mission_origin is None or self._start_heading is None:
+            raise RuntimeError("mission frame is not initialized")
+        origin_x, origin_y = self._mission_origin
+        dx = x - origin_x
+        dy = y - origin_y
+        c = math.cos(self._start_heading)
+        s = math.sin(self._start_heading)
+        return (
+            c * dx + s * dy,
+            -s * dx + c * dy,
+            normalize_angle(heading - self._start_heading),
+        )
+
+    def _from_mission_pose(
+        self,
+        x: float,
+        y: float,
+        heading: float,
+    ) -> tuple[float, float, float]:
+        """Transform a mission-local route pose into odometry coordinates."""
+        if self._mission_origin is None or self._start_heading is None:
+            raise RuntimeError("mission frame is not initialized")
+        origin_x, origin_y = self._mission_origin
+        c = math.cos(self._start_heading)
+        s = math.sin(self._start_heading)
+        return (
+            origin_x + c * x - s * y,
+            origin_y + s * x + c * y,
+            normalize_angle(self._start_heading + heading),
+        )
+
+    @staticmethod
+    def _cross_track_error(
+        x: float,
+        y: float,
+        line_start: tuple[float, float],
+        line_heading: float,
+    ) -> float:
+        """Return signed lateral error; positive means left of the line."""
+        dx = x - line_start[0]
+        dy = y - line_start[1]
+        return -math.sin(line_heading) * dx + math.cos(line_heading) * dy
+
+    def _compute_drive_correction(
+        self,
+        heading_error: float,
+        cross_track_error: float,
+    ) -> float:
+        """Combine heading and cross-track feedback into angular velocity."""
+        correction = 0.0
+        if abs(heading_error) > math.radians(1.0):
+            correction = max(-0.5, min(0.5, self.heading_gain * heading_error))
+            if not self.cross_track_enabled and abs(correction) < 0.12:
+                correction = math.copysign(0.12, correction)
+
+        if self.cross_track_enabled and self.cross_track_gain > 0.0:
+            cross_correction = max(
+                -self.max_cross_track_correction,
+                min(
+                    self.max_cross_track_correction,
+                    -self.cross_track_gain * cross_track_error,
+                ),
             )
-        return self._fail(f"เดินหน้าไม่ครบระยะ {traveled:.2f}/{distance:.2f} เมตร")
+            correction += cross_correction
+
+        return max(-0.5, min(0.5, correction))
+
+    def _compute_drive_speed(
+        self,
+        heading_error: float,
+        cross_track_error: float,
+    ) -> float:
+        """Slow down while recovering a large lateral or angular error."""
+        if not self.cross_track_enabled:
+            return self.linear_speed
+        if (
+            abs(cross_track_error) > 0.10
+            or abs(heading_error) > math.radians(15.0)
+        ):
+            return max(self.min_linear_speed, self.linear_speed * 0.60)
+        return self.linear_speed
+
+    def _remaining_distance(self, target_x: float, target_y: float) -> float:
+        x, y, heading = self._get_pose()
+        local_x, local_y, _ = self._to_mission_pose(x, y, heading)
+        return math.hypot(target_x - local_x, target_y - local_y)
+
+    def _log_navigation_telemetry(
+        self,
+        *,
+        local_x: float,
+        local_y: float,
+        local_heading: float,
+        target_x: float,
+        target_y: float,
+        heading_error: float,
+        cross_track_error: float,
+        remaining: float,
+        linear_speed: float,
+        angular_speed: float,
+    ) -> None:
+        now = self._clock()
+        if now - self._last_telemetry_time < TELEMETRY_INTERVAL_S:
+            return
+        self._last_telemetry_time = now
+        logger.info(
+            "[RouteTelemetry] pose=(%.2f, %.2f, %.1f°) target=(%.2f, %.2f) "
+            "remaining=%.2fm cross_track=%+.3fm heading_error=%+.1f° "
+            "cmd=(v=%.2f,w=%+.2f) obstacle=%s",
+            local_x,
+            local_y,
+            math.degrees(local_heading),
+            target_x,
+            target_y,
+            remaining,
+            cross_track_error,
+            math.degrees(heading_error),
+            linear_speed,
+            angular_speed,
+            self._obstacle_reported,
+        )
 
     def _complete_straight_leg(
         self,
         *,
-        traveled: float,
-        distance: float,
+        remaining: float,
         table_id: int | None,
     ) -> bool:
         """Stop at a completed leg and clear stale obstacle UI state."""
@@ -297,13 +607,12 @@ class WaypointController:
             if self._obstacle_reported:
                 self._set_obstacle_reported(False)
             logger.info(
-                "[Route] Reached parking pose for table %d: %.2f/%.2fm.",
+                "[Route] Reached parking pose for table %d: remaining %.2fm.",
                 table_id,
-                traveled,
-                distance,
+                remaining,
             )
         else:
-            logger.info("[Route] Straight leg completed: %.2fm.", traveled)
+            logger.info("[Route] Waypoint reached: remaining %.2fm.", remaining)
         return True
 
     def turn_to_heading(

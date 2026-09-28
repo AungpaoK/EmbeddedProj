@@ -39,6 +39,9 @@ except ImportError:
     HAS_ROS2 = False
 
 from config import (
+    LEFT_TICK_SCALE,
+    ODOM_TRACK_WIDTH_FACTOR,
+    RIGHT_TICK_SCALE,
     WHEEL_BASE,
     WHEEL_RADIUS,
     TICKS_PER_REV,
@@ -132,11 +135,7 @@ class SlamBridgeNode(Node):
         # A physical 360-degree in-place turn measured about 426.7 degrees at
         # the nominal 0.343 m track, so widen the odometry track by 18.5%.
         # Keep WHEEL_BASE unchanged for converting cmd_vel into wheel speeds.
-        track_factor = os.environ.get(
-            "ODOM_TRACK_WIDTH_FACTOR",
-            os.environ.get("SKID_FACTOR", "1.185"),
-        )
-        self._odom_track_factor = float(track_factor)
+        self._odom_track_factor = ODOM_TRACK_WIDTH_FACTOR
         self._effective_track_width = WHEEL_BASE * self._odom_track_factor
 
         logger.info(
@@ -387,8 +386,8 @@ class SlamBridgeNode(Node):
         sign_r = -1.0 if self._invert_right_enc else 1.0
         sign_lin = -1.0 if self._invert_linear else 1.0
 
-        dl = sign_lin * sign_l * delta_l_raw * METERS_PER_TICK
-        dr = sign_lin * sign_r * delta_r_raw * METERS_PER_TICK
+        dl = sign_lin * sign_l * delta_l_raw * METERS_PER_TICK * LEFT_TICK_SCALE
+        dr = sign_lin * sign_r * delta_r_raw * METERS_PER_TICK * RIGHT_TICK_SCALE
         self._prev_l = l_ticks
         self._prev_r = r_ticks
 
@@ -404,7 +403,7 @@ class SlamBridgeNode(Node):
         # แสดง Log การขยับแบบเรียลไทม์ในเทอร์มินัลเมื่อล้อหมุน
         if abs(dl) > 0.0005 or abs(dr) > 0.0005:
             logger.info(
-                f"[ODOM] dL={dl*100:+.1f}cm, dR={dr*100:+.1f}cm | "
+                f"[ODOM] ticks=({l_ticks},{r_ticks}) dL={dl*100:+.1f}cm, dR={dr*100:+.1f}cm | "
                 f"d={d*100:+.1f}cm, dTh={math.degrees(d_theta):+.1f}° | "
                 f"Pos=({self._x:.2f}, {self._y:.2f})m Yaw={math.degrees(self._theta):.1f}°"
             )

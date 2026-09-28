@@ -15,6 +15,7 @@ Examples:
     python3 src/odometry_calibration_test.py --test roundtrip --condition payload
     python3 src/odometry_calibration_test.py --test turn --condition empty
     python3 src/odometry_calibration_test.py --test all --condition empty
+    python3 src/odometry_calibration_test.py --test all --repeats 5 --condition payload
 
 The default signs match the current ROS launcher: INVERT_LINEAR=1 and
 INVERT_ODOM_YAW=0.  If the robot moves in the wrong direction, stop it with
@@ -430,6 +431,12 @@ def run_turn(runner: MotionTestRunner, args: argparse.Namespace) -> dict:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Interactive odometry calibration tests")
     parser.add_argument("--test", choices=("straight", "roundtrip", "turn", "all"), default="all")
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="repeat each selected test after operator repositions the robot",
+    )
     parser.add_argument("--condition", default="empty", help="payload label, e.g. empty or payload")
     parser.add_argument("--port", default=os.environ.get("MOTION_PORT", "auto"))
     parser.add_argument("--baud", type=int, default=int(os.environ.get("MOTION_SERIAL_BAUD", "115200")))
@@ -448,17 +455,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--turn-sign", type=int, choices=(-1, 1), default=1)
     parser.add_argument("--wheel-radius-m", type=float, default=0.065)
     parser.add_argument("--wheel-base-m", type=float, default=0.343)
-    parser.add_argument("--track-width-factor", type=float, default=1.185)
+    parser.add_argument(
+        "--track-width-factor",
+        type=float,
+        default=float(os.environ.get("ODOM_TRACK_WIDTH_FACTOR", "1.185")),
+    )
     parser.add_argument("--ticks-per-rev", type=float, default=1920.0)
-    parser.add_argument("--left-tick-scale", type=float, default=1.0)
-    parser.add_argument("--right-tick-scale", type=float, default=1.0)
+    parser.add_argument(
+        "--left-tick-scale",
+        type=float,
+        default=float(os.environ.get("LEFT_TICK_SCALE", "1.0")),
+    )
+    parser.add_argument(
+        "--right-tick-scale",
+        type=float,
+        default=float(os.environ.get("RIGHT_TICK_SCALE", "1.0")),
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    if args.distance_m <= 0 or args.cycles < 1 or args.speed_mps <= 0 or args.turn_rate_rad_s <= 0:
-        raise SystemExit("ระยะ, cycles, speed และ turn rate ต้องมากกว่า 0")
+    if (
+        args.distance_m <= 0
+        or args.cycles < 1
+        or args.repeats < 1
+        or args.speed_mps <= 0
+        or args.turn_rate_rad_s <= 0
+    ):
+        raise SystemExit("ระยะ, cycles, repeats, speed และ turn rate ต้องมากกว่า 0")
     if args.speed_mps > 0.20 or args.turn_rate_rad_s > 0.50:
         raise SystemExit("ค่าเริ่มต้นปลอดภัยไม่ควรเกิน speed 0.20 m/s หรือ turn rate 0.50 rad/s")
 
@@ -505,29 +530,36 @@ def main() -> int:
         print(f"Encoder ready: raw L={frame[0]}, R={frame[1]}")
 
         selected = [args.test] if args.test != "all" else ["straight", "roundtrip", "turn"]
-        for test_index, test_name in enumerate(selected):
-            csv_path = output_dir / f"odometry_{args.condition}_{stamp}_{test_name}.csv"
-            runner = MotionTestRunner(ser, config, test_name, csv_path)
-            runner.pose.update(frame[0], frame[1])
-            if test_name == "straight":
-                results.append(run_straight(runner, args))
-            elif test_name == "roundtrip":
-                results.append(run_roundtrip(runner, args))
-            else:
-                results.append(run_turn(runner, args))
-            runner.stop()
-            final_frame = (
-                runner.pose.pose.raw_left_ticks,
-                runner.pose.pose.raw_right_ticks,
-            )
-            runner.close()
-            runner = None
+        total_runs = len(selected) * args.repeats
+        run_number = 0
+        for test_name in selected:
+            for repeat_index in range(args.repeats):
+                run_number += 1
+                csv_path = output_dir / (
+                    f"odometry_{args.condition}_{stamp}_{test_name}_r{repeat_index + 1}.csv"
+                )
+                print(f"\nCalibration run {run_number}/{total_runs}: {test_name} #{repeat_index + 1}")
+                runner = MotionTestRunner(ser, config, test_name, csv_path)
+                runner.pose.update(frame[0], frame[1])
+                if test_name == "straight":
+                    results.append(run_straight(runner, args))
+                elif test_name == "roundtrip":
+                    results.append(run_roundtrip(runner, args))
+                else:
+                    results.append(run_turn(runner, args))
+                runner.stop()
+                final_frame = (
+                    runner.pose.pose.raw_left_ticks,
+                    runner.pose.pose.raw_right_ticks,
+                )
+                runner.close()
+                runner = None
 
-            if test_index < len(selected) - 1:
-                wait_for_operator("จัดหุ่นกลับตำแหน่งเริ่มต้นและเตรียมการทดสอบถัดไป")
-                frame = read_latest_encoder_frame(ser)
-            else:
-                frame = final_frame
+                if run_number < total_runs:
+                    wait_for_operator("จัดหุ่นกลับตำแหน่งเริ่มต้นและเตรียมการทดสอบถัดไป")
+                    frame = read_latest_encoder_frame(ser)
+                else:
+                    frame = final_frame
 
         summary = {
             "config": asdict(config),

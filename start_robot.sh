@@ -270,7 +270,7 @@ YAW_Q="$(quote "$LIDAR_YAW_OFFSET")"
 POS_PORT_Q="$(quote "$POS_PORT")"
 
 lidar_command="${ROS_PREFIX} && ros2 launch sllidar_ros2 sllidar_a1_launch.py serial_port:=${LIDAR_Q} serial_baudrate:=115200"
-bridge_command="${ROS_PREFIX} && cd ${SRC_Q} && MOTION_PORT=${MOTION_Q} MOTION_SERIAL_BAUD=${BAUD_Q} INVERT_LINEAR=1 INVERT_STEER=0 INVERT_ODOM_YAW=0 ODOM_TRACK_WIDTH_FACTOR=1.185 LIDAR_OFFSET_X=0.15 LIDAR_OFFSET_Y=0.0 LIDAR_YAW_OFFSET=${YAW_Q} SELF_FILTER_RADIUS=0.195 exec python3 slam_bridge.py"
+bridge_command="${ROS_PREFIX} && cd ${SRC_Q} && MOTION_PORT=${MOTION_Q} MOTION_SERIAL_BAUD=${BAUD_Q} INVERT_LINEAR=1 INVERT_STEER=0 INVERT_ODOM_YAW=0 LIDAR_OFFSET_X=0.15 LIDAR_OFFSET_Y=0.0 LIDAR_YAW_OFFSET=${YAW_Q} SELF_FILTER_RADIUS=0.195 exec python3 slam_bridge.py"
 viz_command="${ROS_PREFIX} && cd ${SRC_Q} && exec python3 restaurant_visualizer.py"
 pos_command="${ROS_PREFIX} && cd ${PROJECT_Q} && MOTION_BACKEND=ros LIDAR_YAW_OFFSET=${YAW_Q} POS_PORT=${POS_PORT_Q} exec bash deployPOS/run_pos_controller.sh"
 

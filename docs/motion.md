@@ -51,7 +51,7 @@ flowchart LR
 - จุดจอดหน้าโต๊ะ 1: `(JUNCTION_X, +TABLE1_Y)` ค่าเริ่มต้น `TABLE1_Y = 0.6 m`
 - จุดจอดหน้าโต๊ะ 2: `(JUNCTION_X, -TABLE2_Y)` ค่าเริ่มต้น `TABLE2_Y = 0.6 m`
 
-ค่าระยะเหล่านี้มาจาก [config.py](../src/config.py) และเปลี่ยนได้ผ่าน `.env` ตามคู่มือตั้งค่า รถใช้ระยะทางตามช่วงที่กำหนด ไม่ได้ไล่พิกัดโต๊ะด้วย planner ทั่วไป
+ค่าระยะเหล่านี้มาจาก [config.py](../src/config.py) และเปลี่ยนได้ผ่าน `.env` ตามคู่มือตั้งค่า รถใช้ segment และ endpoint ของเส้นทาง fixed route ไม่ได้ใช้ planner ทั่วไป
 
 ## Odometry: แปลง encoder เป็นตำแหน่งและมุม
 
@@ -149,13 +149,27 @@ FSM เรียก `go_to_table()` ตอนส่งแต่ละราย�
 
 `begin_mission()` บันทึก heading ที่อ่านได้เป็น `H` แต่ไม่ได้สั่งหมุนให้ตรงกับทิศ `+X` ก่อนเริ่มเดิน ช่วงแรกจากครัวจึงสั่งให้รักษามุมที่วัดได้ตอนเริ่มภารกิจ ถ้าตัวรถหันผิดแนวอยู่ก่อนเริ่ม งานจะถือแนวนั้นเป็นแกนอ้างอิงใหม่ การหมุนไป heading ที่วางแผนจะเกิดภายหลังเมื่อถึงจุดทางแยก
 
-## วงควบคุมชั้นนอก: รักษามุมระหว่างวิ่งตรง
+## วงควบคุมชั้นนอก: รักษาเส้นทางและ heading
 
-`drive_forward(distance, target_heading)` ทำงานที่ความถี่ `20 Hz` (`control_period = 0.05 s`) และกำหนดความเร็วเดินหน้าเริ่มต้น `v = 0.22 m/s` ทุกตัวอย่าง controller อ่าน `(x, y, θ)` แล้วคำนวณ heading error:
+`drive_to_waypoint(target_x, target_y, target_heading, line_start)` ทำงานที่ความถี่ `20 Hz` (`control_period = 0.05 s`) โดยพิกัดอยู่ใน mission frame ที่ `begin_mission()` จับจากตำแหน่งและ heading ตอนเริ่มงาน ทุกตัวอย่าง controller อ่าน `(x, y, θ)` แล้วคำนวณทั้ง heading error และ cross-track error จากเส้น segment:
 
 \[
 e_\theta = normalize(\theta_{target} - \theta)
 \]
+
+ค่า cross-track error นิยามให้เป็นบวกเมื่อรถอยู่ทางซ้ายของเส้นทาง:
+
+\[
+e_{ct} = -sin(\theta_{line})(x-x_0) + cos(\theta_{line})(y-y_0)
+\]
+
+เมื่อเปิด `CROSS_TRACK_CONTROL=1` คำสั่งเชิงมุมจะรวมสองส่วน:
+
+\[
+\omega = clamp(K_{heading}e_\theta - K_{cross}e_{ct}, -0.5, +0.5)
+\]
+
+โดย `K_heading` ตั้งจาก `HEADING_GAIN` และ `K_cross` ตั้งจาก `CROSS_TRACK_GAIN` พร้อมจำกัดส่วน cross-track ด้วย `MAX_CROSS_TRACK_CORRECTION` หาก error ด้านข้างมากกว่า `0.10 m` หรือ heading error มากกว่า `15°` ระบบจะลดความเร็วลงเหลืออย่างน้อย `MIN_LINEAR_SPEED` เพื่อให้มีเวลาค่อย ๆ กลับเข้าแนว
 
 กฎสร้าง angular velocity correction ในโค้ดคือ:
 
@@ -167,7 +181,7 @@ sign(e_\theta)\cdot\max(0.12,\min(0.5, 1.8|e_\theta|)) & |e_\theta| > 1^\circ
 \end{cases}
 \]
 
-ในสมการนี้ error คำนวณเป็นเรเดียน ดังนั้น `1.8` เป็น gain ที่เปลี่ยน radian ของ error เป็น `rad/s`; ผลลัพธ์ถูกจำกัดอยู่ในช่วง `±0.5 rad/s` และเมื่อ error เกิน deadband จะมีความเร็วเชิงมุมขั้นต่ำ `0.12 rad/s` เพื่อให้การแก้มีผลกับมอเตอร์
+ในสมการนี้ error คำนวณเป็นเรเดียน และผลลัพธ์ถูกจำกัดอยู่ในช่วง `±0.5 rad/s` ส่วน heading-only mode (`CROSS_TRACK_CONTROL=0`) จะคง minimum correction เดิม `0.12 rad/s` เพื่อให้การแก้มีผลกับมอเตอร์
 
 ตัวอย่าง: ถ้า error เป็น `+10° = +0.1745 rad`, ค่าตาม P gain คือ `1.8×0.1745 ≈ 0.314 rad/s` จึงยังไม่ชนเพดาน `0.5`; เครื่องหมายบวกสั่งเลี้ยวซ้ายเพื่อให้ heading เข้าใกล้เป้าหมาย
 
@@ -179,9 +193,9 @@ v_L = v - \frac{\omega B}{2}
 v_R = v + \frac{\omega B}{2}
 \]
 
-โดย `B=0.343 m` ตัวอย่าง `v=0.22 m/s` และ `ω=+0.12 rad/s` จะได้ `vL≈0.199 m/s`, `vR≈0.241 m/s`; ล้อขวาเร็วกว่าเพื่อเลี้ยวซ้าย ค่าที่คำนวณได้ถูกส่งซ้ำทุก control cycle จนเดินครบระยะหรือพบเงื่อนไขหยุด
+โดย `B=0.343 m` ตัวอย่าง `v=0.22 m/s` และ `ω=+0.12 rad/s` จะได้ `vL≈0.199 m/s`, `vR≈0.241 m/s`; ล้อขวาเร็วกว่าเพื่อเลี้ยวซ้าย ค่าที่คำนวณได้ถูกส่งซ้ำทุก control cycle จนตำแหน่งอยู่ใน waypoint tolerance หรือพบเงื่อนไขหยุด
 
-**นี่คือ heading correction ระหว่างการเคลื่อนที่** ไม่ใช่การจัดมุมก่อนออกตัว หากเริ่มต้นมุมคลาด controller จะพยายามกลับไปที่มุมเป้าหมายขณะรถกำลังวิ่ง
+`drive_forward(distance, target_heading)` ยังคงเป็น compatibility wrapper สำหรับ caller เดิม โดยสร้าง waypoint จาก pose ปัจจุบัน ส่วน route หลักใช้ segment endpoint ที่กำหนดใน mission frame จึงสามารถตรวจการเบี่ยงออกจากเส้นได้
 
 ## วงควบคุมการหมุนไป heading เป้าหมาย
 
@@ -214,22 +228,22 @@ t_{max} = \frac{|e_{initial}|}{\max(0.75, 0.1)}\times3 + 6\;s
 
 และถือว่าไม่คืบหน้าหาก error ไม่ลดลงอย่างน้อย `1.5°` นานกว่า `4 s`
 
-## ระยะเดิน การจบช่วงทาง และเงื่อนไขหยุด
+## ระยะเดิน การจบ waypoint และเงื่อนไขหยุด
 
-ระยะทางที่ controller ใช้ในแต่ละช่วงเป็นผลรวมของระยะเคลื่อนที่จาก odometry:
+แต่ละ segment มีจุดเริ่มและ endpoint ใน mission frame controller จะคำนวณระยะห่างจาก endpoint โดยตรง:
 
 \[
-d_{travelled} \leftarrow d_{travelled} + \sqrt{(x_k-x_{k-1})^2+(y_k-y_{k-1})^2}
+d_{remaining} = \sqrt{(x_{target}-x)^2 + (y_{target}-y)^2}
 \]
 
-ช่วงทางทั่วไปถือว่าจบเมื่อ `d_travelled ≥ distance − 0.05 m` โดย `ARRIVAL_TOLERANCE_M=0.05 m` ถ้าระยะเป้าหมายน้อยกว่าหรือเท่ากับ tolerance ฟังก์ชันจบทันทีโดยไม่ส่งคำสั่งเดิน ส่วนช่วงสุดท้ายเข้าหาโต๊ะใช้ `TABLE_STOP_TOLERANCE_M` ค่าเริ่มต้น `0.10 m` เพื่อยอมรับความคลาดเคลื่อนของจุดจอดหน้าโต๊ะ
+ช่วงทางถือว่าจบเมื่อ `d_remaining ≤ WAYPOINT_POSITION_TOLERANCE_M` (ค่าเริ่มต้น `0.10 m`) และ heading error ไม่เกิน `WAYPOINT_HEADING_TOLERANCE_DEG` (ค่าเริ่มต้น `5°`) หากถึงตำแหน่งแล้วแต่มุมยังผิด controller จะหยุดและหมุนเก็บมุมก่อนยืนยัน waypoint ส่วนช่วงสุดท้ายเข้าหาโต๊ะยังใช้ `TABLE_STOP_TOLERANCE_M` ได้ แต่จะไม่แคบกว่าค่า waypoint tolerance
 
 ในช่วงเข้าหาโต๊ะ controller ตรวจสอบระยะ odometry ว่าถึงจุดจอดก่อนตรวจผล LiDAR ในแต่ละรอบ เมื่อถึงจุดจอดจะหยุดและส่งผลสำเร็จให้ FSM ไปสถานะรอรับอาหาร แม้โต๊ะจะยังอยู่ในกรวย LiDAR ด้านหน้า การตรวจนี้ไม่ได้ข้าม safety guard: หากพบคนหรือสิ่งของก่อนถึงจุดจอด รถยังหยุดและรอจนทางโล่งตามเดิม
 
 ระหว่างวิ่งจะหยุดเมื่อเกิดกรณีใดกรณีหนึ่ง:
 
 - feedback readiness/pose ไม่พร้อม (ใน ROS backend)
-- เกิน timeout ซึ่งตั้งต้นเป็น `(distance / max(linear_speed, 0.05)) × 2.5 + 5 s`
+- เกิน timeout ซึ่งตั้งต้นจากความยาว segment และ `linear_speed`
 - ไม่มีความคืบหน้าจาก odometry อย่างน้อย `0.01 m` นานกว่า `4 s`
 - ผู้ใช้ยกเลิกงาน
 - LiDAR safety guard ตรวจพบสิ่งกีดขวาง
@@ -237,6 +251,8 @@ d_{travelled} \leftarrow d_{travelled} + \sqrt{(x_k-x_{k-1})^2+(y_k-y_{k-1})^2}
 เมื่อพบสิ่งกีดขวาง controller ส่งความเร็วศูนย์ รอหนึ่งรอบควบคุม แล้วประเมินใหม่จนพื้นที่ปลอดภัย โดยขยาย deadline ตามเวลาที่หยุด ไม่ได้เลี้ยวหลบหรือคำนวณเส้นทางใหม่
 
 `LidarSafetyGuard` ค่าเริ่มต้นใช้ safety cone ด้านหน้า `±35°`, ระยะหยุด `0.30 m`, ตัดจุดใกล้ตัวถังที่ต่ำกว่า `0.22 m` และต้องมีจุดที่ผ่านเงื่อนไขอย่างน้อย `3` จุดใน scan หนึ่งครั้งจึงแจ้งว่าพบ obstacle การประมวลผลอยู่ใน [lidar_safety.py](../src/lidar_safety.py); ระยะหยุดปรับได้ด้วย `LIDAR_STOP_DIST`, yaw offset ปรับได้ด้วย `LIDAR_YAW_OFFSET` และ tolerance จุดจอดโต๊ะปรับได้ด้วย `TABLE_STOP_TOLERANCE_M`
+
+ระหว่าง segment controller จะเขียน `[RouteTelemetry]` เป็นระยะ โดยมี pose, target, remaining distance, cross-track error, heading error, คำสั่ง `v/ω` และ obstacle state ส่วน `slam_bridge.py` จะ log raw encoder ticks พร้อมระยะล้อและ pose เพื่อใช้เทียบกับการวัดจริงบนพื้นร้าน
 
 ## ชั้นส่งคำสั่งและแปลงความเร็วล้อ
 
@@ -311,12 +327,12 @@ v_{R,target}=v_{ramp}+sync
 | การทำงาน | ที่อยู่ในโค้ด | ทำงานเมื่อใด |
 | --- | --- | --- |
 | จับมุมเริ่มภารกิจ | `WaypointController.begin_mission()` | ก่อนเริ่ม route; อ่านค่า `H` อย่างเดียว ไม่มีการหมุนจัดแนว |
-| รักษา heading ระหว่างตรง | `WaypointController.drive_forward()` | เดินหน้าแต่ละช่วง; คำนวณ `ω` จาก heading error ทุก 0.05 วินาที |
+| รักษาเส้นทางและ heading ระหว่างตรง | `WaypointController.drive_to_waypoint()` / `scenario_runner.py` | เดินตาม segment; คำนวณ `ω` จาก heading และ cross-track error ทุก 0.05 วินาที |
 | หมุนเข้ามุมของช่วงถัดไป | `WaypointController.turn_to_heading()` | ที่ทางแยก/ก่อนเดินช่วงใหม่; หมุนจน odometry อยู่ใน ±2.5° |
 | คุมความเร็วล้อ | `PIDController.compute()` บน Uno | ตลอดที่มีคำสั่งความเร็ว; ลดความต่างระหว่าง target speed กับ encoder speed |
 | wheel sync แบบคำสั่งระยะทาง | `executeForward()` บน Uno | เฉพาะ primitive `FORWARD:`; ไม่ใช่ทางเดินหลักของ waypoint route |
 
-ดังนั้น encoder PID ทำให้แต่ละล้อตามความเร็วที่สั่ง ส่วน heading correction เกิดจากการอ่านความต่าง encoder สองล้อเป็น odometry แล้วให้ Raspberry Pi ปรับความเร็วซ้าย/ขวาอีกชั้นหนึ่ง
+ดังนั้น encoder PID ทำให้แต่ละล้อตามความเร็วที่สั่ง ส่วน route correction เกิดจากการอ่าน odometry แล้วให้ Raspberry Pi ปรับความเร็วซ้าย/ขวาอีกชั้นหนึ่ง โดย endpoint ของ segment ใช้ตำแหน่งและ heading เป็นเงื่อนไขจบ
 
 ## ไฟเลี้ยวและการแก้ heading
 
@@ -326,6 +342,9 @@ Pi ส่ง turn intent เฉพาะเมื่อ `turn_to_heading()` เ�
 
 - วัดเส้นผ่านศูนย์กลางล้อจริงและจำนวน encoder tick ต่อรอบภายใต้น้ำหนักบรรทุกจริง เพราะมีผลกับทั้งระยะและ heading odometry
 - วัดระยะห่างล้อจริง และสำหรับ ROS backend ตรวจ `ODOM_TRACK_WIDTH_FACTOR` โดยเทียบมุมหมุนจริงกับมุมที่รายงาน
+- รัน `src/odometry_calibration_test.py --test all --repeats 5` บนพื้นร้านจริงด้วยการวิ่งตรง 2 เมตรและหมุน 360° อย่างน้อย 5 รอบต่อสภาพน้ำหนัก
+- นำค่า track factor ที่วัดได้ใส่ใน `.env` แทนการพึ่งค่าที่ฝังใน launcher; หากล้อมี scale ต่างกันให้ตั้ง `LEFT_TICK_SCALE` และ `RIGHT_TICK_SCALE`
+- ทดสอบเส้นทางเต็ม 5 รอบ โดย waypoint ต้องคลาดไม่เกิน `0.10 m` และ heading ไม่เกิน `5°`
 - ตรวจเครื่องหมายของ encoder ซ้าย/ขวาและ `INVERT_*` ให้การขับไปข้างหน้าเพิ่ม odometry ตามแกนที่ต้องการ และการสั่ง `ω>0` ให้ heading เพิ่ม
 - ปรับ `JUNCTION_X`, `TABLE1_Y`, `TABLE2_Y` ให้ตรงกับทางจริง เนื่องจาก controller เดินตามระยะที่ตั้งไว้
 - ปรับ gain `1.8`, deadband `1°`, angular correction limits `0.12–0.5 rad/s`, heading tolerance `2.5°` และ speed PID ในสภาพพื้นที่จริงอย่างระมัดระวัง; ค่าเหล่านี้มีอยู่หลายชั้นและมีหน่วยต่างกัน

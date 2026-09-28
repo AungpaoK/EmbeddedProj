@@ -41,10 +41,16 @@ except ImportError as e:
 
 from config import (
     ARRIVAL_TOLERANCE_M,
+    CROSS_TRACK_CONTROL_ENABLED,
+    CROSS_TRACK_GAIN,
+    HEADING_GAIN,
     JUNCTION_X,
+    MAX_CROSS_TRACK_CORRECTION,
+    MIN_LINEAR_SPEED,
     TABLE1_Y,
     TABLE2_Y,
-    WHEEL_BASE,
+    WAYPOINT_HEADING_TOLERANCE_DEG,
+    WAYPOINT_POSITION_TOLERANCE_M,
 )
 from turn_indicator import TURN_LEFT, TURN_OFF, TURN_RIGHT
 
@@ -68,8 +74,18 @@ class ScenarioRunnerNode(Node):
         self.y = 0.0
         self.theta = 0.0
         self.start_pose = (0.0, 0.0, 0.0)
+        self._mission_origin = (0.0, 0.0)
+        self._mission_heading = 0.0
         self.target_v = 0.0
         self.target_w = 0.0
+
+        self.cross_track_enabled = CROSS_TRACK_CONTROL_ENABLED
+        self.cross_track_gain = CROSS_TRACK_GAIN
+        self.heading_gain = HEADING_GAIN
+        self.max_cross_track_correction = MAX_CROSS_TRACK_CORRECTION
+        self.min_linear_speed = MIN_LINEAR_SPEED
+        self.waypoint_position_tolerance_m = WAYPOINT_POSITION_TOLERANCE_M
+        self.waypoint_heading_tolerance_degrees = WAYPOINT_HEADING_TOLERANCE_DEG
 
         # Odometry statistics & heartbeat
         self.odom_count = 0
@@ -392,71 +408,171 @@ class ScenarioRunnerNode(Node):
         speed: float = 0.22,
         target_heading: Optional[float] = None,
     ) -> bool:
-        """Drive a measured distance while correcting yaw drift from odometry."""
-        print(f"  ⬆️ [Motion] เดินหน้า {distance:.2f} เมตร (ความเร็ว {speed:.2f} m/s)...")
-        last_x, last_y = self.x, self.y
+        """Compatibility wrapper that creates a segment from the current pose."""
         if target_heading is None:
             target_heading = self.theta
+        current_x, current_y, _ = self._to_mission_pose(self.x, self.y, self.theta)
+        local_heading = self._wrap_angle(target_heading - self._mission_heading)
+        return self.drive_to_waypoint(
+            current_x + distance * math.cos(local_heading),
+            current_y + distance * math.sin(local_heading),
+            local_heading,
+            line_start=(current_x, current_y),
+            speed=speed,
+        )
+
+    def drive_to_waypoint(
+        self,
+        target_x: float,
+        target_y: float,
+        target_heading: float,
+        *,
+        line_start: tuple[float, float],
+        speed: float = 0.22,
+    ) -> bool:
+        """Drive a mission-frame segment with heading and cross-track feedback."""
         target_heading = self._wrap_angle(target_heading)
-        traveled = 0.0
-
-        max_duration = (distance / max(speed, 0.05)) * 2.5 + 5.0
+        line_heading = self._wrap_angle(
+            math.atan2(target_y - line_start[1], target_x - line_start[0])
+        )
+        segment_distance = math.hypot(target_x - line_start[0], target_y - line_start[1])
+        target_abs_heading = self._wrap_angle(self._mission_heading + target_heading)
+        tolerance = self.waypoint_position_tolerance_m
+        max_duration = (segment_distance / max(speed, 0.05)) * 2.5 + 5.0
         start_time = time.time()
-        last_progress_time = time.time()
-        last_traveled = 0.0
-        last_heading_log_time = 0.0
-        success = False
+        last_progress_time = start_time
+        last_x, last_y = self.x, self.y
+        last_telemetry_time = 0.0
 
-        while rclpy.ok() and traveled < distance:
+        print(
+            f"  ⬆️ [Motion] ไป waypoint ({target_x:.2f}, {target_y:.2f}) "
+            f"segment={segment_distance:.2f}m cross-track="
+            f"{'on' if self.cross_track_enabled else 'off'}..."
+        )
+
+        while rclpy.ok():
             now_t = time.time()
             if now_t - start_time > max_duration:
-                print(f"  ⚠️ [Timeout] เดินหน้าครบกำหนดเวลา ({max_duration:.1f}s) เดินได้ {traveled:.2f}/{distance:.2f}m")
-                break
-
-            if traveled - last_traveled > 0.01:
-                last_progress_time = now_t
-                last_traveled = traveled
-            elif now_t - last_progress_time > 4.0:
-                print("  ⚠️ [Warning] ไม่พบการเปลี่ยนแปลงตำแหน่งจาก /odom เกิน 4 วินาที! มอเตอร์อาจติดขัดหรือเซนเซอร์ไม่ทำงาน")
-                last_progress_time = now_t
-
-            # Hold the heading present at the start of this straight segment.
-            # Delivery launchers configure the bridge so /cmd_vel follows the
-            # ROS convention directly: positive angular.z is counter-clockwise.
-            heading_error = self._wrap_angle(target_heading - self.theta)
-            correction = 0.0
-            if abs(heading_error) > math.radians(1.0):
-                correction = max(-0.5, min(0.5, 1.8 * heading_error))
-                if abs(correction) < 0.12:
-                    correction = math.copysign(0.12, correction)
-
-            self.target_v = speed
-            self.target_w = correction
-            if self.mode == "robot":
-                cmd = Twist()
-                cmd.linear.x = speed
-                cmd.angular.z = correction
-                self.cmd_pub.publish(cmd)
-
-            if abs(heading_error) > math.radians(5.0) and now_t - last_heading_log_time > 1.0:
+                self.stop_robot()
                 print(
-                    f"  ↪️ [Heading Hold] เบน {math.degrees(heading_error):+.1f}° "
-                    f"กำลังชดเชยทิศทาง"
+                    f"  ⚠️ [Timeout] waypoint เหลือ {self._remaining_distance(target_x, target_y):.2f}m"
                 )
-                last_heading_log_time = now_t
+                return False
+
+            local_x, local_y, local_heading = self._to_mission_pose(
+                self.x, self.y, self.theta
+            )
+            remaining = math.hypot(target_x - local_x, target_y - local_y)
+            heading_error = self._wrap_angle(target_heading - local_heading)
+            cross_track_error = self._cross_track_error(
+                local_x, local_y, line_start, line_heading
+            )
+
+            if remaining <= tolerance:
+                self.stop_robot()
+                if abs(math.degrees(heading_error)) <= self.waypoint_heading_tolerance_degrees:
+                    print(
+                        f"  ✓ [Motion] ถึง waypoint เหลือ {remaining:.2f}m "
+                        f"heading error={math.degrees(heading_error):+.1f}°"
+                    )
+                    return True
+                if not self.turn_to_heading(
+                    target_abs_heading,
+                    tolerance_degrees=self.waypoint_heading_tolerance_degrees,
+                ):
+                    return False
+                local_x, local_y, local_heading = self._to_mission_pose(
+                    self.x, self.y, self.theta
+                )
+                remaining = math.hypot(target_x - local_x, target_y - local_y)
+                heading_error = self._wrap_angle(target_heading - local_heading)
+                if (
+                    remaining <= tolerance
+                    and abs(math.degrees(heading_error)) <= self.waypoint_heading_tolerance_degrees
+                ):
+                    return True
+
+            if self.cross_track_enabled:
+                cross_correction = max(
+                    -self.max_cross_track_correction,
+                    min(
+                        self.max_cross_track_correction,
+                        -self.cross_track_gain * cross_track_error,
+                    ),
+                )
+            else:
+                cross_correction = 0.0
+
+            heading_correction = 0.0
+            if abs(heading_error) > math.radians(1.0):
+                heading_correction = max(
+                    -0.5,
+                    min(0.5, self.heading_gain * heading_error),
+                )
+                if not self.cross_track_enabled and abs(heading_correction) < 0.12:
+                    heading_correction = math.copysign(0.12, heading_correction)
+            correction = max(-0.5, min(0.5, heading_correction + cross_correction))
+
+            command_speed = speed
+            if self.cross_track_enabled and (
+                abs(cross_track_error) > 0.10
+                or abs(heading_error) > math.radians(15.0)
+            ):
+                command_speed = max(self.min_linear_speed, speed * 0.60)
+
+            if now_t - last_telemetry_time >= 0.5:
+                print(
+                    f"  [Telemetry] pose=({local_x:.2f},{local_y:.2f},{math.degrees(local_heading):+.1f}°) "
+                    f"target=({target_x:.2f},{target_y:.2f}) remaining={remaining:.2f}m "
+                    f"cross={cross_track_error:+.3f}m heading={math.degrees(heading_error):+.1f}° "
+                    f"cmd=({command_speed:.2f},{correction:+.2f})"
+                )
+                last_telemetry_time = now_t
+
+            self._publish_velocity(command_speed, correction)
             time.sleep(0.05)
 
             step_dist = math.hypot(self.x - last_x, self.y - last_y)
-            traveled += step_dist
             last_x, last_y = self.x, self.y
+            if step_dist >= 0.01:
+                last_progress_time = time.time()
+            elif time.time() - last_progress_time > 4.0:
+                self.stop_robot()
+                print("  ⚠️ [Stall] ไม่พบความคืบหน้าจาก /odom เกิน 4 วินาที")
+                return False
 
         self.stop_robot()
-        if traveled >= max(0.0, distance - ARRIVAL_TOLERANCE_M):
-            success = True
-            print(f"  ✓ [Motion] เดินหน้าสำเร็จ รวมระยะ {traveled:.2f}m (ตำแหน่งปัจจุบัน: X={self.x:.2f}, Y={self.y:.2f})")
-        else:
-            print(f"  ⚠️ [Motion] เดินหน้าไม่ครบระยะ (ได้ {traveled:.2f}/{distance:.2f}m)")
-        return success
+        return False
+
+    def _publish_velocity(self, linear: float, angular: float) -> None:
+        self.target_v = linear
+        self.target_w = angular
+        if self.mode == "robot":
+            cmd = Twist()
+            cmd.linear.x = linear
+            cmd.angular.z = angular
+            self.cmd_pub.publish(cmd)
+
+    def _to_mission_pose(self, x: float, y: float, heading: float):
+        dx = x - self._mission_origin[0]
+        dy = y - self._mission_origin[1]
+        c = math.cos(self._mission_heading)
+        s = math.sin(self._mission_heading)
+        return (
+            c * dx + s * dy,
+            -s * dx + c * dy,
+            self._wrap_angle(heading - self._mission_heading),
+        )
+
+    @staticmethod
+    def _cross_track_error(x, y, line_start, line_heading):
+        dx = x - line_start[0]
+        dy = y - line_start[1]
+        return -math.sin(line_heading) * dx + math.cos(line_heading) * dy
+
+    def _remaining_distance(self, target_x: float, target_y: float) -> float:
+        local_x, local_y, _ = self._to_mission_pose(self.x, self.y, self.theta)
+        return math.hypot(target_x - local_x, target_y - local_y)
 
     def turn_degrees(self, degrees: float, speed: float = 0.75) -> bool:
         """Turn by a relative angle, retaining the closed-loop odometry check."""
@@ -611,6 +727,8 @@ class ScenarioRunnerNode(Node):
 
         # Use the actual odometry pose at mission start as the return target.
         self.start_pose = (self.x, self.y, self.theta)
+        self._mission_origin = (self.x, self.y)
+        self._mission_heading = self.theta
         print(
             f"  📍 [Mission Start] X={self.x:.2f}, Y={self.y:.2f}, "
             f"Yaw={math.degrees(self.theta):.1f}°"
@@ -635,14 +753,18 @@ class ScenarioRunnerNode(Node):
         time.sleep(1.0)
 
         start_heading = self.start_pose[2]
-        heading_out = self._wrap_angle(start_heading)
         heading_table = self._wrap_angle(start_heading + math.pi / 2.0)
         heading_return = self._wrap_angle(start_heading - math.pi / 2.0)
         heading_kitchen = self._wrap_angle(start_heading + math.pi)
 
         # Fixed sequence: kitchen -> junction -> table -> junction -> kitchen.
         print(f"\n[Step 1/5] เดินตรงไปยัง Junction {JUNCTION_X:.2f}m...")
-        if not self.drive_forward(JUNCTION_X, target_heading=heading_out):
+        if not self.drive_to_waypoint(
+            JUNCTION_X,
+            0.0,
+            0.0,
+            line_start=(0.0, 0.0),
+        ):
             print("  ⚠️ [Safety Abort] การเดินหน้าขัดข้อง ยกเลิกขั้นตอนถัดไปเพื่อความปลอดภัย!")
             return
 
@@ -652,7 +774,12 @@ class ScenarioRunnerNode(Node):
             return
 
         print(f"\n[Step 3/5] เดินตรงไปที่โต๊ะ {TABLE1_Y:.2f}m...")
-        if not self.drive_forward(TABLE1_Y, target_heading=heading_table):
+        if not self.drive_to_waypoint(
+            JUNCTION_X,
+            TABLE1_Y,
+            math.pi / 2.0,
+            line_start=(JUNCTION_X, 0.0),
+        ):
             print("  ⚠️ [Safety Abort] การเข้าเทียบโต๊ะขัดข้อง ยกเลิกขั้นตอนถัดไปเพื่อความปลอดภัย!")
             return
 
@@ -662,7 +789,12 @@ class ScenarioRunnerNode(Node):
         if not self.turn_to_heading(heading_return):
             print("  ⚠️ [Safety Abort] หมุนกลับจากโต๊ะไม่สำเร็จ")
             return
-        if not self.drive_forward(TABLE1_Y, target_heading=heading_return):
+        if not self.drive_to_waypoint(
+            JUNCTION_X,
+            0.0,
+            -math.pi / 2.0,
+            line_start=(JUNCTION_X, TABLE1_Y),
+        ):
             print("  ⚠️ [Safety Abort] การวิ่งกลับทางแยกขัดข้อง ยกเลิกขั้นตอนถัดไปเพื่อความปลอดภัย!")
             return
 
@@ -670,7 +802,12 @@ class ScenarioRunnerNode(Node):
         if not self.turn_to_heading(heading_kitchen):
             print("  ⚠️ [Safety Abort] หมุนเข้าหาครัวไม่สำเร็จ")
             return
-        if not self.drive_forward(JUNCTION_X, target_heading=heading_kitchen):
+        if not self.drive_to_waypoint(
+            0.0,
+            0.0,
+            math.pi,
+            line_start=(JUNCTION_X, 0.0),
+        ):
             print("  ⚠️ [Safety Abort] การเดินกลับครัวขัดข้อง!")
             return
 
@@ -691,31 +828,51 @@ class ScenarioRunnerNode(Node):
         time.sleep(1.0)
 
         start_heading = self.start_pose[2]
-        heading_out = self._wrap_angle(start_heading)
         heading_table1 = self._wrap_angle(start_heading + math.pi / 2.0)
         heading_table2 = self._wrap_angle(start_heading - math.pi / 2.0)
         heading_kitchen = self._wrap_angle(start_heading + math.pi)
 
         # --- Deliver Table 1 ---
         print("\n>>> ส่งโต๊ะที่ 1 (Table 1) <<<")
-        if not self.drive_forward(JUNCTION_X, target_heading=heading_out): return
+        if not self.drive_to_waypoint(
+            JUNCTION_X, 0.0, 0.0, line_start=(0.0, 0.0)
+        ): return
         if not self.turn_to_heading(heading_table1): return
-        if not self.drive_forward(TABLE1_Y, target_heading=heading_table1): return
+        if not self.drive_to_waypoint(
+            JUNCTION_X,
+            TABLE1_Y,
+            math.pi / 2.0,
+            line_start=(JUNCTION_X, 0.0),
+        ): return
         self.wait_customer_pickup("Table 1 (ชั้น 1)", wait_sec=3.0)
 
         # --- Deliver Table 2 ---
         print("\n>>> เดินทางไปส่งโต๊ะที่ 2 (Table 2) <<<")
         if not self.turn_to_heading(heading_table2): return
-        if not self.drive_forward(TABLE1_Y, target_heading=heading_table2): return
-        if not self.drive_forward(TABLE2_Y, target_heading=heading_table2): return
+        if not self.drive_to_waypoint(
+            JUNCTION_X,
+            -TABLE2_Y,
+            -math.pi / 2.0,
+            line_start=(JUNCTION_X, TABLE1_Y),
+        ): return
         self.wait_customer_pickup("Table 2 (ชั้น 2)", wait_sec=3.0)
 
         # --- Return to Kitchen ---
         print("\n>>> ส่งครบทั้ง 2 โต๊ะแล้ว เดินทางกลับครัว <<<")
         if not self.turn_to_heading(heading_table1): return
-        if not self.drive_forward(TABLE2_Y, target_heading=heading_table1): return
+        if not self.drive_to_waypoint(
+            JUNCTION_X,
+            0.0,
+            math.pi / 2.0,
+            line_start=(JUNCTION_X, -TABLE2_Y),
+        ): return
         if not self.turn_to_heading(heading_kitchen): return
-        if not self.drive_forward(JUNCTION_X, target_heading=heading_kitchen): return
+        if not self.drive_to_waypoint(
+            0.0,
+            0.0,
+            math.pi,
+            line_start=(JUNCTION_X, 0.0),
+        ): return
 
         print("\n" + "=" * 60)
         start_x, start_y, _ = self.start_pose
