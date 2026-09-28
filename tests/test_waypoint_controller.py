@@ -83,6 +83,22 @@ class DelayedClearSafety:
         return True
 
 
+class OneShotObstacleSafety:
+    """Report one obstacle after the simulated robot has moved a little."""
+
+    def __init__(self, pose, trigger_x=0.05):
+        self.pose = pose
+        self.trigger_x = trigger_x
+        self.reported = False
+
+    @property
+    def is_obstacle_detected(self):
+        if self.reported or self.pose.x < self.trigger_x:
+            return False
+        self.reported = True
+        return True
+
+
 def make_controller(*, heading=0.0, safety=None):
     pose = SimPose(heading)
     motion = SimMotion()
@@ -151,6 +167,41 @@ class WaypointControllerTests(unittest.TestCase):
 
         self.assertGreaterEqual(motion.stop_count, 10)
         self.assertGreater(clock.now, 1.0)
+
+    def test_table_leg_clears_obstacle_indicator_after_reaching_parking_pose(self):
+        pose = SimPose()
+        motion = SimMotion()
+        clock = SimClock(pose, motion)
+        safety = OneShotObstacleSafety(pose)
+        obstacle_events = []
+        controller = WaypointController(
+            motion,
+            safety,
+            lambda: pose.value,
+            ready_provider=lambda: True,
+            pose_fresh_provider=lambda: True,
+            obstacle_handler=obstacle_events.append,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+        self.assertTrue(controller.begin_mission())
+
+        self.assertTrue(controller.drive_forward(0.20, 0.0, table_id=1))
+
+        self.assertGreaterEqual(motion.stop_count, 2)
+        self.assertEqual(obstacle_events, [True, False])
+        self.assertGreaterEqual(pose.x, 0.10)
+
+    def test_obstacle_before_table_parking_pose_still_pauses(self):
+        safety = DelayedClearSafety(blocked_checks=3)
+        controller, _pose, motion, _clock = make_controller(safety=safety)
+        self.assertTrue(controller.begin_mission())
+
+        self.assertTrue(controller.drive_forward(0.20, 0.0, table_id=1))
+
+        # The table-specific arrival tolerance must not allow the controller
+        # to drive through an obstacle encountered before the parking pose.
+        self.assertGreaterEqual(motion.stop_count, 3)
 
     def test_straight_heading_corrections_do_not_set_turn_intent(self):
         controller, _pose, motion, _clock = make_controller(

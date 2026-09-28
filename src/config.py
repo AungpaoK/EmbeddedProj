@@ -40,12 +40,12 @@ SERIAL_TIMEOUT: float = 1.0
 # Waypoint Coordinates (หน่วย: เมตร)
 #   กำหนดให้ Serve Station = (0, 0) หันหน้าไปทาง +X
 #   Junction = (JUNCTION_X, 0)
-#   Table 1 อยู่ทางซ้าย (Y บวก) = (JUNCTION_X, +TABLE1_Y)
-#   Table 2 อยู่ทางขวา (Y ลบ)  = (JUNCTION_X, -TABLE2_Y)
+#   Table 1 จุดจอดหน้าโต๊ะอยู่ทางซ้าย (Y บวก) = (JUNCTION_X, +TABLE1_Y)
+#   Table 2 จุดจอดหน้าโต๊ะอยู่ทางขวา (Y ลบ)  = (JUNCTION_X, -TABLE2_Y)
 # ===========================================================
 JUNCTION_X: float = float(os.environ.get("JUNCTION_X", "2.0"))      # m — ระยะทางตรงจากครัวถึงทางแยก
-TABLE1_Y: float = float(os.environ.get("TABLE1_Y", "0.6"))        # m — ระยะทางจากทางแยกถึงโต๊ะ 1 (ซ้าย/เหนือ)
-TABLE2_Y: float = float(os.environ.get("TABLE2_Y", "0.6"))        # m — ระยะทางจากทางแยกถึงโต๊ะ 2 (ขวา/ใต้)
+TABLE1_Y: float = float(os.environ.get("TABLE1_Y", "0.6"))        # m — ระยะจากทางแยกถึงจุดจอดหน้าโต๊ะ 1
+TABLE2_Y: float = float(os.environ.get("TABLE2_Y", "0.6"))        # m — ระยะจากทางแยกถึงจุดจอดหน้าโต๊ะ 2
 
 # Raspberry Pi address used by the PC-side ROS 2/RViz helper.
 # Accept the requested lowercase spelling as well as the conventional uppercase
@@ -68,6 +68,12 @@ WAYPOINTS: dict = {
 # Motion Tolerances & Timing
 # ===========================================================
 ARRIVAL_TOLERANCE_M: float = 0.05      # m  — ระยะยอมรับว่า "ถึงแล้ว"
+# Table legs use a slightly wider tolerance because the final pose is a
+# deliberate stand-off point in front of a physical table. This does not
+# disable LiDAR safety before the robot reaches this odometry distance.
+TABLE_STOP_TOLERANCE_M: float = float(
+    os.environ.get("TABLE_STOP_TOLERANCE_M", "0.10")
+)  # m — tolerance ของจุดจอดหน้าโต๊ะ
 HEADING_TOLERANCE_DEG: float = 5.0     # °  — มุมยอมรับว่าตรงทิศทางแล้ว
 MOTION_COMMAND_TIMEOUT_S: float = 30.0 # s  — timeout รอ STATUS:DONE จาก Arduino
 PICKUP_WAIT_TIMEOUT_S: float = 120.0   # s  — timeout รอลูกค้าหยิบอาหาร (Manual Override จะข้ามได้)

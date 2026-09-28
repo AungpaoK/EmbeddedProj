@@ -19,7 +19,13 @@ import threading
 import time
 from typing import Callable, Optional, Tuple
 
-from config import ARRIVAL_TOLERANCE_M, JUNCTION_X, TABLE1_Y, TABLE2_Y
+from config import (
+    ARRIVAL_TOLERANCE_M,
+    JUNCTION_X,
+    TABLE1_Y,
+    TABLE2_Y,
+    TABLE_STOP_TOLERANCE_M,
+)
 from turn_indicator import TURN_LEFT, TURN_OFF, TURN_RIGHT
 
 logger = logging.getLogger(__name__)
@@ -115,14 +121,22 @@ class WaypointController:
                 return False
             if not self.turn_to_heading(target_heading):
                 return False
-            if not self.drive_forward(target_distance, target_heading):
+            if not self.drive_forward(
+                target_distance,
+                target_heading,
+                table_id=table_id,
+            ):
                 return False
         elif self._location in {"table_1", "table_2"}:
             previous_table = 1 if self._location == "table_1" else 2
             previous_distance = TABLE1_Y if previous_table == 1 else TABLE2_Y
             if not self.turn_to_heading(target_heading):
                 return False
-            if not self.drive_forward(previous_distance + target_distance, target_heading):
+            if not self.drive_forward(
+                previous_distance + target_distance,
+                target_heading,
+                table_id=table_id,
+            ):
                 return False
         else:
             return self._fail(f"ตำแหน่งเส้นทางไม่ถูกต้อง: {self._location}")
@@ -167,9 +181,24 @@ class WaypointController:
         target_heading: float,
         *,
         timeout_s: Optional[float] = None,
+        table_id: int | None = None,
     ) -> bool:
-        """Drive a measured distance while correcting yaw drift."""
-        if distance <= ARRIVAL_TOLERANCE_M:
+        """Drive a measured distance while correcting yaw drift.
+
+        ``table_id`` marks the final leg to a table parking pose. The pose is
+        still reached from odometry; the only special handling is that the
+        arrival check runs before the LiDAR pause check on each control cycle.
+        This lets a table remain in front of the robot after it has safely
+        reached the stand-off pose without treating the table as a blockage.
+        Obstacles encountered before that pose continue to stop the robot.
+        """
+        if table_id is not None and table_id not in (1, 2):
+            return self._fail(f"ไม่รู้จักโต๊ะ {table_id}")
+
+        arrival_tolerance = (
+            TABLE_STOP_TOLERANCE_M if table_id is not None else ARRIVAL_TOLERANCE_M
+        )
+        if distance <= arrival_tolerance:
             return True
         if not self._feedback_healthy():
             return self._fail("Arduino หรือ odometry ไม่พร้อมก่อนเริ่มเดินหน้า")
@@ -188,14 +217,28 @@ class WaypointController:
             math.degrees(target_heading),
         )
 
-        while self._active and not self._cancel_event.is_set() and traveled < distance:
+        while self._active and not self._cancel_event.is_set():
             if not self._feedback_healthy():
                 return self._fail("Arduino หรือ odometry ขาดการตอบสนองระหว่างเดินหน้า")
             if self._clock() > deadline:
                 return self._fail(f"เดินหน้าไม่ครบระยะ {traveled:.2f}/{distance:.2f} เมตร")
 
+            # The parking pose is the navigation goal. Check it first so a
+            # physical table that is expected to remain in front of the robot
+            # cannot leave the POS in an obstacle state after arrival.
+            if traveled >= max(0.0, distance - arrival_tolerance):
+                return self._complete_straight_leg(
+                    traveled=traveled,
+                    distance=distance,
+                    table_id=table_id,
+                )
+
             self._report_obstacle_state()
-            if self._safety.is_obstacle_detected:
+            # _report_obstacle_state samples the safety guard once and keeps
+            # the result edge-triggered. Do not read the sensor a second time
+            # in the same cycle; some safety providers update their snapshot
+            # on property access.
+            if self._obstacle_reported:
                 paused_at = self._clock()
                 self._motion.stop_continuous()
                 self._sleep(self.control_period)
@@ -230,10 +273,38 @@ class WaypointController:
         self._motion.stop_continuous()
         if self._cancel_event.is_set():
             return False
-        if traveled >= max(0.0, distance - ARRIVAL_TOLERANCE_M):
-            logger.info("[Route] Straight leg completed: %.2fm.", traveled)
-            return True
+        if traveled >= max(0.0, distance - arrival_tolerance):
+            return self._complete_straight_leg(
+                traveled=traveled,
+                distance=distance,
+                table_id=table_id,
+            )
         return self._fail(f"เดินหน้าไม่ครบระยะ {traveled:.2f}/{distance:.2f} เมตร")
+
+    def _complete_straight_leg(
+        self,
+        *,
+        traveled: float,
+        distance: float,
+        table_id: int | None,
+    ) -> bool:
+        """Stop at a completed leg and clear stale obstacle UI state."""
+        self._motion.stop_continuous()
+        if table_id is not None:
+            # A table is expected to remain visible in the front LiDAR cone
+            # while the robot waits for pickup. It is the reached destination,
+            # not a currently actionable blockage for the POS display.
+            if self._obstacle_reported:
+                self._set_obstacle_reported(False)
+            logger.info(
+                "[Route] Reached parking pose for table %d: %.2f/%.2fm.",
+                table_id,
+                traveled,
+                distance,
+            )
+        else:
+            logger.info("[Route] Straight leg completed: %.2fm.", traveled)
+        return True
 
     def turn_to_heading(
         self,
@@ -356,9 +427,13 @@ class WaypointController:
         detected = bool(self._safety.is_obstacle_detected)
         if detected == self._obstacle_reported:
             return
-        self._obstacle_reported = detected
+        self._set_obstacle_reported(detected)
+
+    def _set_obstacle_reported(self, detected: bool) -> None:
+        """Update the edge-triggered obstacle state exposed to the POS."""
+        self._obstacle_reported = bool(detected)
         if self._obstacle_handler is not None:
-            self._obstacle_handler(detected)
+            self._obstacle_handler(self._obstacle_reported)
 
     def cancel(self) -> None:
         if self._obstacle_handler is not None:
