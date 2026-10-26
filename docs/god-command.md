@@ -39,7 +39,13 @@ model/fw/hw: 18 1d 01 07
 
 ssh -N -L 8765:127.0.0.1:8765 henlowworld@172.30.81.49
 
-
 ```
 
 arduino-cli compile --fqbn arduino:avr:uno --upload --port /dev/serial/by-id/usb-Arduino__www.arduino.cc__0043_24238313635351910130-if00 ${DIR}
+
+
+
+fuser -v /dev/ttyACM0
+stty -F /dev/ttyACM0 115200 raw -echo
+timeout 5s cat /dev/ttyACM0
+```
